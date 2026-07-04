@@ -12,22 +12,16 @@ from datetime import datetime, timedelta
 
 from data.vessels   import VESSELS
 from data.cargoes   import CARGOES
-from data.routes    import ROUTES
 from data.terminals import TERMINALS
 from core.optimizer import assign_cargoes
+from core.routing   import build_route
 from core.physics   import calculate_eta
 
 
-def build_gantt_data(assignments, cargoes, vessels, routes):
-    """
-    Build the list of bars for the Gantt chart.
-    Each bar = one cargo on one vessel, from loading start to discharge end.
-    Color = delivery status.
-    """
-    cargoes_by_id = {c["id"]: c for c in cargoes}
-    vessels_by_id = {v["id"]: v for v in vessels}
-    routes_by_key = {f"{r['origin']}->{r['destination']}": r for r in routes}
-
+def build_gantt_data(assignments, cargoes, vessels, terminals):
+    cargoes_by_id   = {c["id"]: c for c in cargoes}
+    vessels_by_id   = {v["id"]: v for v in vessels}
+    terminals_by_id = {t["id"]: t for t in terminals}
     bars = []
 
     for a in assignments:
@@ -37,10 +31,9 @@ def build_gantt_data(assignments, cargoes, vessels, routes):
         loading_start = datetime.fromisoformat(cargo["laycan_start"])
         loading_end   = loading_start + timedelta(hours=24)
 
-        route_key = f"{cargo['loading_terminal']}->{cargo['discharge_terminal']}"
-        route = routes_by_key.get(route_key)
-        if not route:
-            continue
+        origin = terminals_by_id[cargo["loading_terminal"]]
+        dest   = terminals_by_id[cargo["discharge_terminal"]]
+        route  = build_route(origin, dest)
 
         eta = calculate_eta(
             departure_date_iso=loading_end.isoformat(timespec="minutes"),
@@ -53,14 +46,15 @@ def build_gantt_data(assignments, cargoes, vessels, routes):
         discharge_start = datetime.fromisoformat(eta["eta_iso"])
         discharge_end   = discharge_start + timedelta(hours=24)
 
-        delivery_window_start = datetime.fromisoformat(cargo["delivery_window_start"])
-        delivery_window_end   = datetime.fromisoformat(cargo["delivery_window_end"])
-        if discharge_start > delivery_window_end:
-            color = "red"      # arrives after delivery window
-        elif discharge_start < delivery_window_start:
-            color = "orange"   # arrives before delivery window opens
+        dw_start = datetime.fromisoformat(cargo["delivery_window_start"])
+        dw_end   = datetime.fromisoformat(cargo["delivery_window_end"])
+
+        if discharge_start > dw_end:
+            color = "red"
+        elif discharge_start < dw_start:
+            color = "orange"
         else:
-            color = "green"    # on time
+            color = "green"
 
         bars.append({
             "vessel":          vessel["id"],
@@ -79,12 +73,11 @@ def render_gantt():
     st.title("Cargo Schedule — Gantt View")
 
     result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    bars   = build_gantt_data(result["assignments"], CARGOES, VESSELS, ROUTES)
+    bars   = build_gantt_data(result["assignments"], CARGOES, VESSELS, TERMINALS)
 
     fig = go.Figure()
 
     for bar in bars:
-        # Loading phase
         fig.add_trace(go.Bar(
             name=bar["cargo"],
             x=[(bar["loading_end"] - bar["loading_start"]).total_seconds() / 86400],
@@ -100,7 +93,6 @@ def render_gantt():
             showlegend=False,
         ))
 
-        # Transit + discharge phase
         color_map = {"green": "#5DCAA5", "orange": "#EF9F27", "red": "#D85A30"}
         fig.add_trace(go.Bar(
             name=bar["cargo"],
@@ -119,10 +111,7 @@ def render_gantt():
 
     fig.update_layout(
         barmode="stack",
-        xaxis=dict(
-            title="Days from March 1, 2025",
-            range=[0, 35],
-        ),
+        xaxis=dict(title="Days from March 1, 2025", range=[0, 45]),
         yaxis=dict(title="Vessel"),
         height=400,
         plot_bgcolor="white",
@@ -130,18 +119,12 @@ def render_gantt():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Legend
     col1, col2, col3 = st.columns(3)
     col1.success("🟢 On time")
     col2.warning("🟠 Early / tight")
     col3.error("🔴 Delivery window breached")
 
-    # Unassigned cargoes
     if result["unassigned"]:
         st.subheader("Unassigned cargoes")
         for u in result["unassigned"]:
             st.error(f"**{u['cargo_id']}** — {u['reason']}")
-
-
-if __name__ == "__main__":
-    render_gantt()

@@ -7,29 +7,19 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-import math
 from datetime import datetime, timedelta
 
 from data.vessels   import VESSELS
 from data.terminals import TERMINALS
 from data.cargoes   import CARGOES
-from data.routes    import ROUTES
+
 from core.optimizer  import assign_cargoes
 from core.physics    import calculate_eta
+from core.routing    import build_route, haversine_nm
 from core.constraints import check_draft_compatibility, check_laycan_compliance, check_slot_overlap
 
 
-def haversine_nm(lat1, lon1, lat2, lon2):
-    """Great-circle distance in nautical miles between two lat/lon points."""
-    R = 3440.065
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi    = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
-
-
-def detect_alerts(assignments, cargoes, vessels, terminals, routes):
+def detect_alerts(assignments, cargoes, vessels, terminals):
     """
     Run all constraint checks on current assignments.
     """
@@ -134,7 +124,7 @@ def render_alerts():
     st.title("Alerts & Conflicts")
 
     result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS, ROUTES)
+    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
 
     critical = [a for a in alerts if a["severity"] == "CRITICAL"]
     warnings = [a for a in alerts if a["severity"] == "WARNING"]

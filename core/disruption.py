@@ -117,17 +117,16 @@ def apply_terminal_offline(terminal, cargoes, offline_start_iso, offline_end_iso
 if __name__ == "__main__":
     from data.vessels   import VESSELS
     from data.cargoes   import CARGOES
-    from data.routes    import ROUTES
     from data.terminals import TERMINALS
+    from core.routing   import build_route
 
     print("=== core/disruption.py ===")
 
     # --- Vessel delay ---
-    vessel = next(v for v in VESSELS  if v["id"] == "VESSEL-QF-01")
-    cargo  = next(c for c in CARGOES  if c["id"] == "LNG-C01")
-    route  = next(r for r in ROUTES
-                  if r["origin"] == cargo["loading_terminal"]
-                  and r["destination"] == cargo["discharge_terminal"])
+    vessel = next(v for v in VESSELS if v["id"] == "VESSEL-QF-01")
+    cargo  = next(c for c in CARGOES if c["id"] == "LNG-C01")
+    terms  = {t["id"]: t for t in TERMINALS}
+    route  = build_route(terms[cargo["loading_terminal"]], terms[cargo["discharge_terminal"]])
 
     print(f"\n-- Vessel delay --")
     print(f"  Vessel : {vessel['id']}")

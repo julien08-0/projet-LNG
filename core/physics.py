@@ -124,22 +124,21 @@ def calculate_eta(departure_date_iso, distance_nm, speed_knots,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    from data.vessels import VESSELS
-    from data.cargoes import CARGOES
-    from data.routes import ROUTES
+    from data.vessels   import VESSELS
+    from data.cargoes   import CARGOES
+    from data.terminals import TERMINALS
+    from core.routing   import build_route
 
     print("=== core/physics.py ===")
 
-    # Pick a real vessel and cargo from data/
     vessel = next(v for v in VESSELS if v["id"] == "VESSEL-QF-01")
-    cargo = next(c for c in CARGOES if c["id"] == "LNG-C01")
-    route = next(r for r in ROUTES
-                 if r["origin"] == cargo["loading_terminal"]
-                 and r["destination"] == cargo["discharge_terminal"])
+    cargo  = next(c for c in CARGOES if c["id"] == "LNG-C01")
+    terms  = {t["id"]: t for t in TERMINALS}
+    route  = build_route(terms[cargo["loading_terminal"]], terms[cargo["discharge_terminal"]])
 
     print(f"\nVessel: {vessel['id']} ({vessel['vessel_class']})")
     print(f"Cargo:  {cargo['id']} ({cargo['volume_mmbtu']:,} mmBtu)")
-    print(f"Route:  {route['origin']} -> {route['destination']} ({route['distance_nm']:,} nm)")
+    print(f"Route:  {route['origin_id']} -> {route['destination_id']} ({route['distance_nm']:,} nm)")
 
     # 1. ETA
     eta = calculate_eta(
