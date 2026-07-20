@@ -18,6 +18,7 @@ from ui.kpi        import render_kpi
 from ui.pnl        import render_pnl
 from ui.disruption import render_disruption
 from ui.fleet      import render_fleet
+from ui.spot       import render_spot
 
 page = st.sidebar.selectbox("Navigation", [
     "Overview",
@@ -28,6 +29,7 @@ page = st.sidebar.selectbox("Navigation", [
     "P&L",
     "Disruption Simulator",
     "Fleet Management",
+    "Spot Trading",
 ])
 
 if page == "Overview":
@@ -46,3 +48,5 @@ elif page == "Disruption Simulator":
     render_disruption()
 elif page == "Fleet Management":
     render_fleet()
+elif page == "Spot Trading":
+    render_spot()

@@ -108,8 +108,14 @@ PANAMA_TRANSIT_HOURS = 24.0
 PANAMA_TOLL_USD      = 350_000
 
 # ---------------------------------------------------------------------------
-# Market price marker by discharge terminal (for P&L / destination choice)
-# Live/fallback price resolution lives in core/market.py, not here.
+# Market price marker by terminal (for P&L / destination choice, and for
+# core/spot.py's regional buy/sell prices). Live/fallback price resolution
+# lives in core/market.py, not here.
+#
+# Loading terminals are included too (RAS-LAFFAN, SABINE-PASS) — they only
+# matter for core/spot.py, which needs a "buy" price on the loading side.
+# core/pnl.py only ever looks up the destination terminal, so adding these
+# is additive and doesn't change existing contract P&L.
 # ---------------------------------------------------------------------------
 
 TERMINAL_PRICE_MARKER = {
@@ -117,7 +123,40 @@ TERMINAL_PRICE_MARKER = {
     "ZEEBRUGGE":      "TTF",
     "GATE-ROTTERDAM": "TTF",
     "AL-ZOUR":        "JKM",   # no dedicated MENA marker modeled — Asia/MENA proxy
+    "RAS-LAFFAN":     "JKM",   # Qatari cargoes commonly netback-priced off Asian benchmarks
+    "SABINE-PASS":    "HH",    # standard US LNG feedgas indexation (HH + liquefaction fee)
 }
+
+# ---------------------------------------------------------------------------
+# Spot market simulation (core/spot.py) — daily regional price paths and
+# the opportunistic dispatch decision.
+# ---------------------------------------------------------------------------
+
+# Daily volatility of each regional benchmark, as a fraction of price
+# (e.g. 0.02 = 2%/day standard deviation of the daily log-return). Applied
+# as a bounded random walk seeded by SPOT_PRICE_SEED — same seed, same
+# price path, every run (reproducible for demos and tests).
+SPOT_DAILY_VOLATILITY = {
+    "JKM": 0.030,
+    "TTF": 0.030,
+    "HH":  0.050,   # HH is historically more volatile than the LNG spot markers
+}
+SPOT_PRICE_SEED = 10   # picked because it produces both wins and a loss over
+                        # the 46-day horizon on the current fleet/cargo data —
+                        # demonstrates the risk this module exists to show
+
+# A spot voyage is only dispatched if its expected margin (computed with
+# today's prices — the only prices known at decision time) clears this
+# floor. 0 = dispatch anything with a positive expected margin.
+SPOT_MIN_EXPECTED_MARGIN_USD = 0.0
+
+# US Gulf Coast FOB cargo cost is NOT the raw Henry Hub commodity price —
+# HH is wellhead/feedgas, not delivered LNG. Standard US offtake SPA
+# formula (Cheniere-style): 115% of Henry Hub, plus a liquefaction tolling
+# fee. Applied only to HH-linked loading terminals in core/spot.py — JKM/TTF
+# loading terminals are already a landed-price proxy, no fee on top.
+HH_INDEXATION_FACTOR       = 1.15
+LIQUEFACTION_FEE_USD_MMBTU = 3.00
 
 # ---------------------------------------------------------------------------
 # Freight rates (simulated charter cost by vessel class, USD/day)
@@ -176,5 +215,11 @@ if __name__ == "__main__":
     print("\n-- Freight rates --")
     for cls, rate in FREIGHT_RATE_USD_PER_DAY.items():
         print(f"  {cls:<8} ${rate:,.0f}/day")
+
+    print("\n-- Spot market simulation --")
+    for marker, vol in SPOT_DAILY_VOLATILITY.items():
+        print(f"  {marker:<4} daily volatility {vol*100:.1f}%")
+    print(f"  seed                    {SPOT_PRICE_SEED}")
+    print(f"  min expected margin     ${SPOT_MIN_EXPECTED_MARGIN_USD:,.0f}")
 
     print("\nOK")

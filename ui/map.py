@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import streamlit as st
+import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import math
@@ -308,6 +309,82 @@ def _render_vessel_card(vessel, color, state, why=None):
 
 
 # ---------------------------------------------------------------------------
+# Contracts panel — same `day` clock as the map, so scrubbing the slider
+# updates both at once. Shows every cargo (assigned, blocked, or
+# unassigned), not just the ones matching the vessel-class filter above.
+# ---------------------------------------------------------------------------
+
+PHASE_LABEL = {
+    "waiting":     "Awaiting loading",
+    "loading":     "Loading",
+    "in_transit":  "In transit",
+    "discharging": "Discharging",
+    "completed":   "Delivered",
+}
+
+
+def _contract_rows(day, enriched, unassigned, vessels, cargoes, terminals, closed_chokepoints):
+    cargoes_by_id   = {c["id"]: c for c in cargoes}
+    vessels_by_id   = {v["id"]: v for v in vessels}
+    terminals_by_id = {t["id"]: t for t in terminals}
+    sim_start       = datetime(2025, 3, 1)
+
+    rows = []
+    for e in enriched:
+        cargo = cargoes_by_id[e["cargo_id"]]
+        if not e["feasible"]:
+            rows.append({
+                "Cargo": e["cargo_id"], "Priority": cargo["priority"],
+                "Type": cargo["contract_type"], "Vessel": e["vessel_id"],
+                "Destination": "—", "Status": "Blocked (no feasible destination)",
+                "Net margin ($)": None,
+            })
+            continue
+
+        vessel = vessels_by_id[e["vessel_id"]]
+        origin = terminals_by_id[cargo["loading_terminal"]]
+        dest   = terminals_by_id[e["discharge_terminal"]]
+        route  = build_route(origin, dest, closed_chokepoints)
+        state  = get_vessel_state(vessel, cargo, route, day, sim_start, e["discharge_terminal"])
+
+        rows.append({
+            "Cargo": e["cargo_id"], "Priority": cargo["priority"],
+            "Type": cargo["contract_type"], "Vessel": e["vessel_id"],
+            "Destination": e["discharge_terminal"], "Status": PHASE_LABEL[state["phase"]],
+            "Net margin ($)": e["margin"]["net_margin_usd"],
+        })
+
+    for u in unassigned:
+        cargo = cargoes_by_id[u["cargo_id"]]
+        rows.append({
+            "Cargo": u["cargo_id"], "Priority": cargo["priority"],
+            "Type": cargo["contract_type"], "Vessel": "—",
+            "Destination": "—", "Status": "Unassigned",
+            "Net margin ($)": None,
+        })
+
+    rows.sort(key=lambda r: -r["Priority"])
+    return rows
+
+
+def _render_contracts_panel(day, enriched, unassigned, vessels, cargoes, terminals, closed_chokepoints):
+    st.divider()
+    st.subheader("Contracts")
+    st.caption(f"Status as of Day {day} — same clock as the map above.")
+
+    rows = _contract_rows(day, enriched, unassigned, vessels, cargoes, terminals, closed_chokepoints)
+    df = pd.DataFrame(rows)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Net margin ($)": st.column_config.NumberColumn(format="$%,.0f"),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 
@@ -429,6 +506,8 @@ def render_map():
                 st.error(f"{e['cargo_id']} assigned to {e['vessel_id']} but no feasible "
                          f"destination given closed chokepoints")
 
+    _render_contracts_panel(day, enriched, result["unassigned"], VESSELS, CARGOES, TERMINALS, closed)
+
     # Play/Pause auto-advance — a full Streamlit rerun per tick keeps the map
     # and side panel on the same `day` clock (no Plotly-side animation, so no
     # risk of the two drifting apart). The actual increment happens above,
@@ -437,3 +516,7 @@ def render_map():
     if st.session_state.fleet_playing:
         time.sleep(0.5)
         st.rerun()
+
+
+if __name__ == "__main__":
+    render_map()
