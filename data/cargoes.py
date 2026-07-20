@@ -7,7 +7,8 @@ CARGOES = [
         "id":                     "LNG-C01",
         "volume_mmbtu":           3_200_000,
         "loading_terminal":       "RAS-LAFFAN",
-        "discharge_terminal":     "FUTTSU",
+        "discharge_terminal":     None,   # DES — seller chooses destination, see core/pnl.py
+        "possible_destinations":  ["FUTTSU", "ZEEBRUGGE", "GATE-ROTTERDAM", "AL-ZOUR"],
         "laycan_start":           "2025-03-01T06:00",
         "laycan_end":             "2025-03-03T06:00",
         "delivery_window_start":  "2025-03-22T06:00",
@@ -21,7 +22,8 @@ CARGOES = [
         "id":                     "LNG-C02",
         "volume_mmbtu":           3_000_000,
         "loading_terminal":       "RAS-LAFFAN",
-        "discharge_terminal":     "ZEEBRUGGE",
+        "discharge_terminal":     None,   # DES — seller chooses destination, see core/pnl.py
+        "possible_destinations":  ["FUTTSU", "ZEEBRUGGE", "GATE-ROTTERDAM", "AL-ZOUR"],
         "laycan_start":           "2025-03-02T00:00",
         "laycan_end":             "2025-03-04T00:00",
         "delivery_window_start":  "2025-03-24T00:00",
@@ -49,7 +51,8 @@ CARGOES = [
         "id":                     "LNG-C04",
         "volume_mmbtu":           3_500_000,
         "loading_terminal":       "RAS-LAFFAN",
-        "discharge_terminal":     "AL-ZOUR",
+        "discharge_terminal":     None,   # DES — seller chooses destination, see core/pnl.py
+        "possible_destinations":  ["FUTTSU", "ZEEBRUGGE", "GATE-ROTTERDAM", "AL-ZOUR"],
         "laycan_start":           "2025-03-03T00:00",
         "laycan_end":             "2025-03-04T12:00",
         "delivery_window_start":  "2025-03-06T00:00",
@@ -63,7 +66,8 @@ CARGOES = [
         "id":                     "LNG-C05",
         "volume_mmbtu":           2_800_000,
         "loading_terminal":       "RAS-LAFFAN",
-        "discharge_terminal":     "GATE-ROTTERDAM",
+        "discharge_terminal":     None,   # DES — seller chooses destination, see core/pnl.py
+        "possible_destinations":  ["FUTTSU", "ZEEBRUGGE", "GATE-ROTTERDAM", "AL-ZOUR"],
         "laycan_start":           "2025-03-06T00:00",
         "laycan_end":             "2025-03-08T00:00",
         "delivery_window_start":  "2025-03-22T00:00",
@@ -94,7 +98,11 @@ if __name__ == "__main__":
     print("=== cargoes.py ===")
     print(f"  {len(CARGOES)} cargoes loaded\n")
     for c in CARGOES:
+        if c["discharge_terminal"]:
+            destination = c["discharge_terminal"]
+        else:
+            destination = f"flexible ({len(c['possible_destinations'])} options)"
         print(f"  [{c['id']:<10}] {c['volume_mmbtu']:>10,} mmBtu  "
-              f"{c['loading_terminal']:<14} -> {c['discharge_terminal']:<16} "
+              f"{c['loading_terminal']:<14} -> {destination:<24} "
               f"{c['contract_type']:<4} priority={c['priority']}")
     print("\nOK")

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+.streamlit/secrets.toml
+.env
+.idea/
+.vscode/
+.DS_Store
+.claude/scheduled_tasks.lock

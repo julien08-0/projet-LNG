@@ -6,75 +6,58 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
-from datetime import datetime, timedelta
 
-from data.vessels   import VESSELS
-from data.terminals import TERMINALS
-from data.cargoes   import CARGOES
-from core.optimizer import assign_cargoes
-from core.routing   import build_route
-from core.physics   import calculate_eta, calculate_boiloff
-from config         import PRICE_JKM
+from data.vessels    import VESSELS
+from data.terminals  import TERMINALS
+from data.cargoes    import CARGOES
+from core.optimizer  import assign_cargoes
+from core.pnl        import enrich_assignments_with_pnl
+from ui.fleet_state  import get_fleet
+from ui.theme        import inject_dark_theme
 
 
-def compute_kpis(assignments, cargoes, vessels, terminals):
-    cargoes_by_id   = {c["id"]: c for c in cargoes}
-    vessels_by_id   = {v["id"]: v for v in vessels}
-    terminals_by_id = {t["id"]: t for t in terminals}
-
-    assigned_vessel_ids = {a["vessel_id"] for a in assignments}
-    assigned_cargo_ids  = {a["cargo_id"]  for a in assignments}
+def compute_kpis(enriched_assignments, cargoes, vessels):
+    """
+    Aggregate fleet-level KPIs from assignments already enriched with P&L
+    (core/pnl.py) — BOG/margin figures are reused as-is, not recomputed,
+    so this page always agrees with the P&L page for the same fleet.
+    """
+    assigned_vessel_ids = {a["vessel_id"] for a in enriched_assignments}
+    feasible             = [a for a in enriched_assignments if a["feasible"]]
+    feasible_cargo_ids   = {a["cargo_id"] for a in feasible}
 
     fleet_utilization = len(assigned_vessel_ids) / len(vessels) * 100
-    total_volume      = sum(c["volume_mmbtu"] for c in cargoes if c["id"] in assigned_cargo_ids)
-    total_bog         = 0.0
-    total_bunker      = 0.0
+    total_volume      = sum(c["volume_mmbtu"] for c in cargoes if c["id"] in feasible_cargo_ids)
 
-    for a in assignments:
-        cargo  = cargoes_by_id[a["cargo_id"]]
-        vessel = vessels_by_id[a["vessel_id"]]
-
-        origin = terminals_by_id[cargo["loading_terminal"]]
-        dest   = terminals_by_id[cargo["discharge_terminal"]]
-        route  = build_route(origin, dest)
-
-        loading_end = datetime.fromisoformat(cargo["laycan_start"]) + timedelta(hours=24)
-        eta = calculate_eta(
-            departure_date_iso=loading_end.isoformat(timespec="minutes"),
-            distance_nm=route["distance_nm"],
-            speed_knots=vessel["speed_knots"],
-            weather_delay_hours=route["weather_delay_hours"],
-            canal_delay_hours=route["canal_delay_hours"],
-        )
-        bog = calculate_boiloff(
-            cargo_volume_mmbtu=cargo["volume_mmbtu"],
-            transit_days=eta["transit_days"],
-            vessel_class=vessel["vessel_class"],
-            ambient_temp_celsius=28.0,
-        )
-        total_bog    += bog["gross_bog_mmbtu"]
-        total_bunker += bog["bunker_saving_usd"]
+    total_bog_mmbtu   = sum(a["margin"]["gross_bog_mmbtu"]   for a in feasible)
+    total_bog_usd     = sum(a["margin"]["bog_cost_usd"]      for a in feasible)
+    total_bunker_usd  = sum(a["margin"]["bunker_saving_usd"] for a in feasible)
+    total_net_margin  = sum(a["margin"]["net_margin_usd"]    for a in feasible)
 
     return {
         "fleet_utilization_pct":   round(fleet_utilization, 1),
         "total_volume_mmbtu":      round(total_volume, 0),
-        "total_bog_mmbtu":         round(total_bog, 0),
-        "total_bog_usd":           round(total_bog * PRICE_JKM, 0),
-        "total_bunker_saving_usd": round(total_bunker, 0),
-        "unassigned_count":        len(cargoes) - len(assigned_cargo_ids),
+        "total_bog_mmbtu":         round(total_bog_mmbtu, 0),
+        "total_bog_usd":           round(total_bog_usd, 0),
+        "total_bunker_saving_usd": round(total_bunker_usd, 0),
+        "total_net_margin_usd":    round(total_net_margin, 0),
+        "unassigned_count":        len(cargoes) - len(feasible_cargo_ids),
     }
 
 
 def render_kpi():
+    inject_dark_theme()
     st.title("KPI Dashboard")
 
-    result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    kpis   = compute_kpis(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    VESSELS = get_fleet()
+    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
+    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    kpis     = compute_kpis(enriched, CARGOES, VESSELS)
 
     st.subheader("Fleet")
     col1, col2, col3 = st.columns(3)
     col1.metric("Fleet utilization",  f"{kpis['fleet_utilization_pct']}%")
-    col2.metric("Cargoes assigned",   f"{len(result['assignments'])} / {len(CARGOES)}")
+    col2.metric("Cargoes deliverable", f"{len(CARGOES) - kpis['unassigned_count']} / {len(CARGOES)}")
     col3.metric("Unassigned cargoes", kpis["unassigned_count"])
 
     st.divider()
@@ -87,14 +70,19 @@ def render_kpi():
 
     st.divider()
 
-    st.subheader("Costs")
-    col1, col2 = st.columns(2)
+    st.subheader("Costs & margin")
+    col1, col2, col3 = st.columns(3)
     col1.metric("Bunker saving (BOG as fuel)", f"${kpis['total_bunker_saving_usd']:,.0f}")
     col2.metric("Net BOG cost",
                 f"${kpis['total_bog_usd'] - kpis['total_bunker_saving_usd']:,.0f}")
+    col3.metric("Total fleet net margin", f"${kpis['total_net_margin_usd']:,.0f}")
 
-    if result["unassigned"]:
+    if result["unassigned"] or any(not a["feasible"] for a in enriched):
         st.divider()
-        st.subheader("Unassigned cargoes")
+        st.subheader("Unassigned / infeasible cargoes")
         for u in result["unassigned"]:
             st.warning(f"**{u['cargo_id']}** — {u['reason']}")
+        for a in enriched:
+            if not a["feasible"]:
+                st.warning(f"**{a['cargo_id']}** — assigned to {a['vessel_id']} "
+                           f"but no feasible destination (draft/route)")

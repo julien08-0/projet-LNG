@@ -66,10 +66,20 @@ BOG_ANCHOR_RATE_FRACTION      = 0.50   # BOG rate at anchor vs underway
 # Market prices (USD/mmBtu) — indicative Q1 2025
 # ---------------------------------------------------------------------------
 
-PRICE_JKM = 11.50   # Japan/Korea Marker (Asian spot)
 PRICE_TTF = 10.80   # Title Transfer Facility (European spot)
 PRICE_HH  =  2.40   # Henry Hub (US benchmark)
 PRICE_HFO = 12.00   # Heavy fuel oil equivalent (bunker saving calc)
+PRICE_BRENT = 78.00 # $/bbl — informational only, not consumed by core/pnl.py yet
+
+ASIAN_SPREAD_USD_MMBTU = 0.70   # JKM = TTF + spread (core/market.py)
+PRICE_JKM = PRICE_TTF + ASIAN_SPREAD_USD_MMBTU   # Japan/Korea Marker (Asian spot)
+
+# Static fallback FX rates (USD -> quote currency). Informational only —
+# nothing in core/pnl.py converts currency yet.
+FX_RATE_USD_TO = {
+    "EUR": 0.92,
+    "JPY": 149.00,
+}
 
 # ---------------------------------------------------------------------------
 # Operations
@@ -97,6 +107,29 @@ SUEZ_TOLL_USD        = 600_000
 PANAMA_TRANSIT_HOURS = 24.0
 PANAMA_TOLL_USD      = 350_000
 
+# ---------------------------------------------------------------------------
+# Market price marker by discharge terminal (for P&L / destination choice)
+# Live/fallback price resolution lives in core/market.py, not here.
+# ---------------------------------------------------------------------------
+
+TERMINAL_PRICE_MARKER = {
+    "FUTTSU":         "JKM",
+    "ZEEBRUGGE":      "TTF",
+    "GATE-ROTTERDAM": "TTF",
+    "AL-ZOUR":        "JKM",   # no dedicated MENA marker modeled — Asia/MENA proxy
+}
+
+# ---------------------------------------------------------------------------
+# Freight rates (simulated charter cost by vessel class, USD/day)
+# ---------------------------------------------------------------------------
+
+FREIGHT_RATE_USD_PER_DAY = {
+    "Q-Max":  95_000,
+    "Q-Flex": 85_000,
+    "TFDE":   70_000,
+    "STEAM":  60_000,
+}
+
 
 # ---------------------------------------------------------------------------
 # Self-test
@@ -118,10 +151,15 @@ if __name__ == "__main__":
         print(f"  {cls:<8} {draft}m")
 
     print("\n-- Market prices --")
-    print(f"  JKM : ${PRICE_JKM}/mmBtu")
-    print(f"  TTF : ${PRICE_TTF}/mmBtu")
-    print(f"  HH  : ${PRICE_HH}/mmBtu")
-    print(f"  HFO : ${PRICE_HFO}/mmBtu")
+    print(f"  JKM   : ${PRICE_JKM}/mmBtu  (= TTF + {ASIAN_SPREAD_USD_MMBTU} spread)")
+    print(f"  TTF   : ${PRICE_TTF}/mmBtu")
+    print(f"  HH    : ${PRICE_HH}/mmBtu")
+    print(f"  HFO   : ${PRICE_HFO}/mmBtu")
+    print(f"  Brent : ${PRICE_BRENT}/bbl (informational)")
+
+    print("\n-- FX rates (USD ->) --")
+    for currency, rate in FX_RATE_USD_TO.items():
+        print(f"  {currency:<4} {rate}")
 
     print("\n-- Demurrage rates --")
     for cls, rate in DEMURRAGE_RATE.items():
@@ -130,5 +168,13 @@ if __name__ == "__main__":
     print("\n-- Canals --")
     print(f"  Suez   : {SUEZ_TRANSIT_HOURS}h  ${SUEZ_TOLL_USD:,.0f}")
     print(f"  Panama : {PANAMA_TRANSIT_HOURS}h  ${PANAMA_TOLL_USD:,.0f}")
+
+    print("\n-- Terminal price markers --")
+    for term, marker in TERMINAL_PRICE_MARKER.items():
+        print(f"  {term:<16} {marker}")
+
+    print("\n-- Freight rates --")
+    for cls, rate in FREIGHT_RATE_USD_PER_DAY.items():
+        print(f"  {cls:<8} ${rate:,.0f}/day")
 
     print("\nOK")

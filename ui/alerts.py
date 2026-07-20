@@ -17,6 +17,8 @@ from core.optimizer  import assign_cargoes
 from core.physics    import calculate_eta
 from core.routing    import build_route, haversine_nm
 from core.constraints import check_draft_compatibility, check_laycan_compliance, check_slot_overlap
+from ui.fleet_state  import get_fleet
+from ui.theme        import inject_dark_theme
 
 
 def detect_alerts(assignments, cargoes, vessels, terminals):
@@ -110,8 +112,9 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
     assigned_ids = {a["cargo_id"] for a in assignments}
     for cargo in cargoes:
         if cargo["id"] not in assigned_ids:
+            severity = "CRITICAL" if cargo["priority"] >= 8 else "WARNING"
             alerts.append({
-                "severity": "WARNING",
+                "severity": severity,
                 "cargo_id":  cargo["id"],
                 "vessel_id": "—",
                 "message":  f"No vessel assigned to {cargo['id']} (priority={cargo['priority']})",
@@ -121,8 +124,10 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
 
 
 def render_alerts():
+    inject_dark_theme()
     st.title("Alerts & Conflicts")
 
+    VESSELS = get_fleet()
     result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
     alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
 

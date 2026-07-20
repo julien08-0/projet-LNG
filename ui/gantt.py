@@ -10,21 +10,28 @@ import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-from data.vessels   import VESSELS
-from data.cargoes   import CARGOES
-from data.terminals import TERMINALS
-from core.optimizer import assign_cargoes
-from core.routing   import build_route
-from core.physics   import calculate_eta
+from data.vessels    import VESSELS
+from data.cargoes    import CARGOES
+from data.terminals  import TERMINALS
+from core.optimizer  import assign_cargoes
+from core.pnl        import enrich_assignments_with_pnl
+from core.routing    import build_route
+from core.physics    import calculate_eta
+from ui.fleet_state  import get_fleet
+from ui.theme        import (inject_dark_theme, PAGE_BG, TEXT_MUTED,
+                              STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL)
 
 
-def build_gantt_data(assignments, cargoes, vessels, terminals):
+def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
     cargoes_by_id   = {c["id"]: c for c in cargoes}
     vessels_by_id   = {v["id"]: v for v in vessels}
     terminals_by_id = {t["id"]: t for t in terminals}
     bars = []
 
-    for a in assignments:
+    for a in enriched_assignments:
+        if not a["feasible"]:
+            continue
+
         cargo  = cargoes_by_id[a["cargo_id"]]
         vessel = vessels_by_id[a["vessel_id"]]
 
@@ -32,7 +39,7 @@ def build_gantt_data(assignments, cargoes, vessels, terminals):
         loading_end   = loading_start + timedelta(hours=24)
 
         origin = terminals_by_id[cargo["loading_terminal"]]
-        dest   = terminals_by_id[cargo["discharge_terminal"]]
+        dest   = terminals_by_id[a["discharge_terminal"]]
         route  = build_route(origin, dest)
 
         eta = calculate_eta(
@@ -70,10 +77,13 @@ def build_gantt_data(assignments, cargoes, vessels, terminals):
 
 
 def render_gantt():
+    inject_dark_theme()
     st.title("Cargo Schedule — Gantt View")
 
-    result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    bars   = build_gantt_data(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    VESSELS = get_fleet()
+    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
+    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    bars     = build_gantt_data(enriched, CARGOES, VESSELS, TERMINALS)
 
     fig = go.Figure()
 
@@ -93,7 +103,7 @@ def render_gantt():
             showlegend=False,
         ))
 
-        color_map = {"green": "#5DCAA5", "orange": "#EF9F27", "red": "#D85A30"}
+        color_map = {"green": STATUS_GOOD, "orange": STATUS_WARNING, "red": STATUS_CRITICAL}
         fig.add_trace(go.Bar(
             name=bar["cargo"],
             x=[(bar["discharge_end"] - bar["loading_end"]).total_seconds() / 86400],
@@ -114,7 +124,9 @@ def render_gantt():
         xaxis=dict(title="Days from March 1, 2025", range=[0, 45]),
         yaxis=dict(title="Vessel"),
         height=400,
-        plot_bgcolor="white",
+        plot_bgcolor=PAGE_BG,
+        paper_bgcolor=PAGE_BG,
+        font=dict(color=TEXT_MUTED),
     )
 
     st.plotly_chart(fig, use_container_width=True)

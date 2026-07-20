@@ -19,6 +19,31 @@ from config import (
 
 
 # ---------------------------------------------------------------------------
+# Demurrage
+# ---------------------------------------------------------------------------
+
+def calculate_demurrage(delay_hours, daily_rate_usd):
+    """
+    Calculate demurrage cost for hours spent late against a laycan.
+
+    daily_rate_usd is the rate to apply — typically the cargo's own
+    contractual demurrage_rate_usd_day, falling back to config.DEMURRAGE_RATE
+    by vessel class when no contract-specific rate is available.
+
+    Returns a dict with:
+      demurrage_days : delay expressed in days
+      demurrage_usd  : total demurrage cost
+    """
+    demurrage_days = delay_hours / 24.0
+    demurrage_usd = demurrage_days * daily_rate_usd
+
+    return {
+        "demurrage_days": round(demurrage_days, 3),
+        "demurrage_usd":  round(demurrage_usd, 2),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Boil-off
 # ---------------------------------------------------------------------------
 
@@ -131,8 +156,8 @@ if __name__ == "__main__":
 
     print("=== core/physics.py ===")
 
-    vessel = next(v for v in VESSELS if v["id"] == "VESSEL-QF-01")
-    cargo  = next(c for c in CARGOES if c["id"] == "LNG-C01")
+    vessel = next(v for v in VESSELS if v["id"] == "VESSEL-QF-02")
+    cargo  = next(c for c in CARGOES if c["id"] == "LNG-C03")
     terms  = {t["id"]: t for t in TERMINALS}
     route  = build_route(terms[cargo["loading_terminal"]], terms[cargo["discharge_terminal"]])
 
@@ -175,5 +200,12 @@ if __name__ == "__main__":
     print(f"  Required heel : {heel['required_heel_m3']:,.0f} m3")
     print(f"  Actual heel   : {heel['actual_heel_m3']:,.0f} m3")
     print(f"  Sufficient    : {heel['is_sufficient']}")
+
+    # 4. Demurrage
+    demurrage = calculate_demurrage(delay_hours=30.0, daily_rate_usd=cargo["demurrage_rate_usd_day"])
+    print(f"\n-- Demurrage --")
+    print(f"  Delay          : 30.0h ({demurrage['demurrage_days']} days)")
+    print(f"  Rate           : ${cargo['demurrage_rate_usd_day']:,.0f}/day")
+    print(f"  Demurrage cost : ${demurrage['demurrage_usd']:,.0f}")
 
     print("\nOK")

@@ -1,0 +1,14 @@
+# Runtime dependencies for the Streamlit app (app.py + core/ + data/ + ui/).
+# Verified by grepping actual imports across all .py files — no unused
+# packages (e.g. folium/streamlit-folium are NOT imported anywhere in the
+# current code and are intentionally omitted, despite being mentioned in
+# CONTEXT.md).
+streamlit>=1.58.0
+plotly>=6.8.0
+pandas>=2.0.0
+pulp>=2.7.0
+requests>=2.31.0
+
+# Optional, NOT required at startup — only used if core/market.py's
+# get_brent_price(use_live=True) is explicitly called (default is False).
+# Install manually if you need live Brent pricing: pip install yfinance
