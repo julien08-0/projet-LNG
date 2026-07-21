@@ -13,7 +13,7 @@ from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
 from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme
+from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def compute_kpis(enriched_assignments, cargoes, vessels):
@@ -54,6 +54,10 @@ def render_kpi():
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
     kpis     = compute_kpis(enriched, CARGOES, VESSELS)
 
+    hero_metric("Total fleet net margin", f"${kpis['total_net_margin_usd']/1e6:,.1f}M",
+                accent=STATUS_GOOD if kpis["total_net_margin_usd"] >= 0 else STATUS_CRITICAL)
+
+    st.divider()
     st.subheader("Fleet")
     col1, col2, col3 = st.columns(3)
     col1.metric("Fleet utilization",  f"{kpis['fleet_utilization_pct']}%")
@@ -70,12 +74,11 @@ def render_kpi():
 
     st.divider()
 
-    st.subheader("Costs & margin")
-    col1, col2, col3 = st.columns(3)
+    st.subheader("Costs")
+    col1, col2 = st.columns(2)
     col1.metric("Bunker saving (BOG as fuel)", f"${kpis['total_bunker_saving_usd']:,.0f}")
     col2.metric("Net BOG cost",
                 f"${kpis['total_bog_usd'] - kpis['total_bunker_saving_usd']:,.0f}")
-    col3.metric("Total fleet net margin", f"${kpis['total_net_margin_usd']:,.0f}")
 
     if result["unassigned"] or any(not a["feasible"] for a in enriched):
         st.divider()

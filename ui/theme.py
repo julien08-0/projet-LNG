@@ -23,6 +23,39 @@ TERMINAL_LOAD_COLOR      = "#7fd4ff"
 TERMINAL_DISCHARGE_COLOR = "#5ce6a6"
 
 
+def hero_metric(label, value, sublabel=None, accent=None):
+    """
+    The one number that matters most on a page — call at most once per page,
+    near the top. Deliberately bigger and more isolated than st.metric() or
+    badge_html(), so it's the first thing read, before any table or chart.
+    """
+    import streamlit as st
+    color = accent or TEXT_PRIMARY
+    sub_html = (f"<div style='color:{TEXT_MUTED};font-size:0.85rem;margin-top:6px;'>{sublabel}</div>"
+                if sublabel else "")
+    st.markdown(
+        f"<div style='text-align:center;padding:20px 12px 22px;'>"
+        f"<div style='color:{TEXT_MUTED};font-size:0.8rem;text-transform:uppercase;"
+        f"letter-spacing:0.06em;margin-bottom:8px;'>{label}</div>"
+        f"<div style='color:{color};font-size:2.7rem;font-weight:750;line-height:1.1;'>{value}</div>"
+        f"{sub_html}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def badge_html(text, color=None):
+    """
+    Small pill for tertiary/technical detail (e.g. a BOG rate, a route
+    rationale) — the opposite end of the hierarchy from hero_metric(). Never
+    the main takeaway of a section; returns a string so it can be embedded
+    inside a larger custom HTML block.
+    """
+    fg = color or TEXT_MUTED
+    return (f"<span style='background:{SURFACE_ALT};color:{fg};font-size:0.72rem;"
+            f"padding:2px 9px;border-radius:9px;font-weight:600;white-space:nowrap;'>{text}</span>")
+
+
 def inject_dark_theme():
     """Call once near the top of each render_*() page function.
 

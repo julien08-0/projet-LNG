@@ -7,6 +7,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
+import pandas as pd
 from datetime import datetime, timedelta
 
 from data.vessels   import VESSELS
@@ -18,7 +19,7 @@ from core.physics    import calculate_eta
 from core.routing    import build_route, haversine_nm
 from core.constraints import check_draft_compatibility, check_laycan_compliance, check_slot_overlap
 from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme
+from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def detect_alerts(assignments, cargoes, vessels, terminals):
@@ -135,23 +136,34 @@ def render_alerts():
     warnings = [a for a in alerts if a["severity"] == "WARNING"]
     infos    = [a for a in alerts if a["severity"] == "INFO"]
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🔴 Critical", len(critical))
-    col2.metric("🟠 Warnings", len(warnings))
-    col3.metric("🔵 Info",     len(infos))
-
-    st.divider()
+    hero_metric(
+        "Critical alerts",
+        str(len(critical)),
+        sublabel=f"{len(warnings)} warnings · {len(infos)} info",
+        accent=STATUS_CRITICAL if critical else STATUS_GOOD,
+    )
 
     if not alerts:
         st.success("No alerts detected — all assignments are valid.")
         return
 
-    for a in critical:
-        st.error(f"**CRITICAL** | {a['cargo_id']} / {a['vessel_id']}\n\n{a['message']}")
-    for a in warnings:
-        st.warning(f"**WARNING** | {a['cargo_id']} / {a['vessel_id']}\n\n{a['message']}")
-    for a in infos:
-        st.info(f"**INFO** | {a['cargo_id']} / {a['vessel_id']}\n\n{a['message']}")
+    def _table(rows):
+        return pd.DataFrame([{"Cargo": a["cargo_id"], "Vessel": a["vessel_id"], "Message": a["message"]}
+                              for a in rows])
+
+    if critical:
+        st.subheader("Critical — needs a decision now")
+        for a in critical:
+            st.error(f"**{a['cargo_id']} / {a['vessel_id']}** — {a['message']}")
+
+    if warnings:
+        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+        with st.expander(f"⚠️ {len(warnings)} warning(s)", expanded=len(warnings) <= 3):
+            st.dataframe(_table(warnings), use_container_width=True, hide_index=True)
+
+    if infos:
+        with st.expander(f"ℹ️ {len(infos)} info"):
+            st.dataframe(_table(infos), use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":

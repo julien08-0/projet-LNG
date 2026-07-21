@@ -1,7 +1,8 @@
 # ui/pnl.py
 # P&L page: economic destination decisions per cargo.
-# Shows, for each assigned cargo, the margin comparison across every
-# candidate destination and the reasoning behind the chosen one.
+# One clean result line per cargo (vessel -> destination -> margin), the
+# full destination comparison only shown on demand — the comparison is the
+# reasoning, not the headline.
 
 import sys
 import os
@@ -16,7 +17,8 @@ from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl, format_decision_text
 from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme
+from ui.theme        import (inject_dark_theme, hero_metric, badge_html, SURFACE, BORDER,
+                              TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING)
 
 
 def candidates_to_dataframe(candidates):
@@ -36,6 +38,45 @@ def candidates_to_dataframe(candidates):
     return pd.DataFrame(rows)
 
 
+def _result_row(cargo, a):
+    flexible = cargo["discharge_terminal"] is None
+    type_color = "#a99bff" if flexible else "#7fd4ff"
+    type_label = "DES" if flexible else "FOB"
+
+    if not a["feasible"]:
+        st.markdown(
+            f"<div style='background:{SURFACE};border:1px solid {BORDER};border-radius:10px;"
+            f"padding:12px 16px;margin-bottom:8px;'>"
+            f"{badge_html(a['cargo_id'], type_color)} {badge_html(type_label, TEXT_MUTED)} "
+            f"<span style='color:{STATUS_CRITICAL};margin-left:8px;'>No feasible destination "
+            f"(draft incompatible or route blocked at every candidate)</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    margin = a["margin"]["net_margin_usd"]
+    margin_color = STATUS_GOOD if margin >= 0 else STATUS_CRITICAL
+
+    st.markdown(
+        f"<div style='background:{SURFACE};border:1px solid {BORDER};border-radius:10px;"
+        f"padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;"
+        f"justify-content:space-between;flex-wrap:wrap;gap:8px;'>"
+        f"<div>{badge_html(a['cargo_id'], type_color)} {badge_html(type_label, TEXT_MUTED)} "
+        f"<span style='color:{TEXT_PRIMARY};margin-left:6px;'>{a['vessel_id']} → "
+        f"<b>{a['discharge_terminal']}</b></span></div>"
+        f"<div style='color:{margin_color};font-weight:700;font-size:1.1rem;'>"
+        f"${margin/1e6:,.1f}M</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if len(a["candidates"]) > 1:
+        with st.expander(f"Compare {len(a['candidates'])} candidate destinations"):
+            st.dataframe(candidates_to_dataframe(a["candidates"]), use_container_width=True, hide_index=True)
+            st.code(format_decision_text(a["cargo_id"], {"chosen": a["margin"], "candidates": a["candidates"]}))
+
+
 def render_pnl():
     inject_dark_theme()
     st.title("P&L — Destination Decisions")
@@ -47,33 +88,26 @@ def render_pnl():
     cargoes_by_id = {c["id"]: c for c in CARGOES}
 
     total_margin = sum(a["margin"]["net_margin_usd"] for a in enriched if a["feasible"])
-    st.metric("Total fleet net margin", f"${total_margin:,.0f}")
+    hero_metric("Total fleet net margin", f"${total_margin/1e6:,.1f}M",
+                accent=STATUS_GOOD if total_margin >= 0 else STATUS_CRITICAL)
 
     st.divider()
 
     for a in enriched:
-        cargo    = cargoes_by_id[a["cargo_id"]]
-        flexible = cargo["discharge_terminal"] is None
-        label    = "DES — flexible destination" if flexible else "FOB — fixed destination"
-
-        st.subheader(f"{a['cargo_id']} · {label} · {a['vessel_id']}")
-
-        if not a["feasible"]:
-            st.error("No feasible destination (draft incompatible or route blocked "
-                     "by closed chokepoint at every candidate).")
-            st.divider()
-            continue
-
-        st.dataframe(candidates_to_dataframe(a["candidates"]), use_container_width=True, hide_index=True)
-        with st.expander("Decision detail"):
-            st.code(format_decision_text(a["cargo_id"], {"chosen": a["margin"], "candidates": a["candidates"]}))
-
-        st.divider()
+        cargo = cargoes_by_id[a["cargo_id"]]
+        _result_row(cargo, a)
 
     if result["unassigned"]:
+        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
         st.subheader("Unassigned cargoes")
         for u in result["unassigned"]:
-            st.warning(f"**{u['cargo_id']}** — {u['reason']}")
+            priority = cargoes_by_id[u["cargo_id"]]["priority"]
+            color = STATUS_CRITICAL if priority >= 8 else STATUS_WARNING
+            st.markdown(
+                f"<div style='margin-bottom:6px;font-size:0.88rem;'>"
+                f"{badge_html(u['cargo_id'], color)} <span style='color:{TEXT_MUTED};'>{u['reason']}</span></div>",
+                unsafe_allow_html=True,
+            )
 
 
 if __name__ == "__main__":

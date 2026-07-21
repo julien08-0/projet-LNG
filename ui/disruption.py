@@ -21,16 +21,22 @@ from core.disruption import (
     simulate_disruption_impact,
 )
 from ui.fleet_state import get_fleet
-from ui.theme       import inject_dark_theme
+from ui.theme       import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def _render_impact_summary(impact):
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Baseline fleet margin", f"${impact['baseline']['total_margin_usd']:,.0f}")
-    col2.metric("Scenario fleet margin", f"${impact['scenario']['total_margin_usd']:,.0f}",
-                delta=f"${impact['delta_usd']:,.0f} ({impact['delta_pct']:+.1f}%)")
     changed_count = sum(1 for d in impact["cargo_diffs"] if d["changed"])
-    col3.metric("Cargoes affected", changed_count)
+
+    hero_metric(
+        "$ impact of this scenario",
+        f"${impact['delta_usd']/1e6:+,.1f}M",
+        sublabel=f"({impact['delta_pct']:+.1f}%) · {changed_count} cargo(es) affected",
+        accent=STATUS_GOOD if impact["delta_usd"] >= 0 else STATUS_CRITICAL,
+    )
+
+    col1, col2 = st.columns(2)
+    col1.metric("Baseline fleet margin", f"${impact['baseline']['total_margin_usd']:,.0f}")
+    col2.metric("Scenario fleet margin", f"${impact['scenario']['total_margin_usd']:,.0f}")
 
     for cargo_id, priority in impact["newly_unassigned_with_priority"]:
         if priority >= 8:
@@ -45,13 +51,23 @@ def _render_cargo_diff_table(impact):
     if not rows:
         st.success("No change in assignment, destination or margin for this scenario.")
         return
-    df = pd.DataFrame(rows)[[
-        "cargo_id", "priority",
-        "baseline_vessel", "baseline_destination", "baseline_margin_usd",
-        "scenario_vessel", "scenario_destination", "scenario_margin_usd",
-        "margin_delta_usd",
-    ]]
-    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    compact = pd.DataFrame(rows)[["cargo_id", "priority", "scenario_vessel",
+                                   "scenario_destination", "margin_delta_usd"]]
+    compact = compact.rename(columns={
+        "cargo_id": "Cargo", "priority": "Priority", "scenario_vessel": "Vessel now",
+        "scenario_destination": "Destination now", "margin_delta_usd": "Margin delta ($)",
+    })
+    st.dataframe(compact, use_container_width=True, hide_index=True)
+
+    with st.expander("Compare against baseline (before the scenario)"):
+        full = pd.DataFrame(rows)[[
+            "cargo_id", "priority",
+            "baseline_vessel", "baseline_destination", "baseline_margin_usd",
+            "scenario_vessel", "scenario_destination", "scenario_margin_usd",
+            "margin_delta_usd",
+        ]]
+        st.dataframe(full, use_container_width=True, hide_index=True)
 
 
 def render_disruption():
