@@ -293,6 +293,13 @@ def simulate_spot_market(vessels, terminals, cargoes, contract_assignments_enric
                 "expected_margin_usd":  best["expected_margin_usd"],
                 "realized_margin_usd":  round(realized_margin_usd, 2),
                 "outcome":              "gain" if realized_margin_usd >= 0 else "loss",
+                # Timeline fields — used by ui/map.py to animate this voyage
+                # the same way a fixed contract is animated (ballast ->
+                # loading -> transit -> discharge), reusing get_vessel_state()
+                # unchanged rather than adding a second rendering path.
+                "ballast_days":         best["ballast_days"],
+                "loading_done_day":     best["loading_done_day"],
+                "laden_transit_days":   best["laden_transit_days"],
             })
 
             dest_term = terminals_by_id[best["discharge_terminal_id"]]

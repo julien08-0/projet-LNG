@@ -24,12 +24,15 @@ from data.terminals  import TERMINALS
 from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
+from core.spot       import simulate_spot_market
 from core.routing    import build_route
 from core.physics    import calculate_boiloff
 from config          import BOILOFF_RATE
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, PAGE_BG, CHART_BG, VESSEL_PALETTE,
+from ui.theme        import (inject_dark_theme, badge_html, PAGE_BG, CHART_BG, VESSEL_PALETTE,
                               TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR)
+
+SPOT_HORIZON_DAYS = 46   # matches the map's own Day 0-45 slider range
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +153,84 @@ def get_vessel_state(vessel, cargo, route, day, sim_start, discharge_terminal_id
 
 
 # ---------------------------------------------------------------------------
+# Vessel voyage timelines — a vessel may work a fixed contract, then one or
+# more opportunistic spot voyages once it's free (core/spot.py). Both are
+# rendered through the exact same get_vessel_state() above: each voyage is
+# reduced to the same shape get_vessel_state already expects (a loading
+# terminal, a discharge terminal, a volume, and a loading-start date), so
+# there is only one rendering path, not two.
+# ---------------------------------------------------------------------------
+
+def _vessel_voyages(vessel_id, contract_entry, cargoes_by_id, spot_decisions_by_vessel, sim_start):
+    """Ordered list of this vessel's jobs: the fixed contract first (if any),
+    then its spot voyages in dispatch order. core/spot.py never dispatches a
+    vessel before its previous job (contract or spot) has fully discharged,
+    so these never overlap in time — each job can be resolved independently."""
+    jobs = []
+
+    if contract_entry is not None:
+        cargo = cargoes_by_id[contract_entry["cargo_id"]]
+        start_day = (datetime.fromisoformat(cargo["laycan_start"]) - sim_start).total_seconds() / 86400.0
+        jobs.append({
+            "kind": "contract",
+            "label": contract_entry["cargo_id"],
+            "start_day": start_day,
+            "loading_terminal_id": cargo["loading_terminal"],
+            "discharge_terminal_id": contract_entry["discharge_terminal"],
+            "volume_mmbtu": cargo["volume_mmbtu"],
+            "loading_start_iso": cargo["laycan_start"],
+            "margin_usd": contract_entry["margin"]["net_margin_usd"],
+            "contract_type": cargo["contract_type"],
+            "candidates": contract_entry["candidates"],
+        })
+
+    for d in sorted(spot_decisions_by_vessel.get(vessel_id, []), key=lambda d: d["dispatch_day"]):
+        loading_start_day  = d["dispatch_day"] + d["ballast_days"]
+        loading_start_date = sim_start + timedelta(days=loading_start_day)
+        jobs.append({
+            "kind": "spot",
+            "label": f"Spot · Day {d['dispatch_day']}",
+            "start_day": loading_start_day,
+            "loading_terminal_id": d["load_terminal_id"],
+            "discharge_terminal_id": d["discharge_terminal_id"],
+            "volume_mmbtu": d["volume_mmbtu"],
+            "loading_start_iso": loading_start_date.isoformat(timespec="minutes"),
+            "decision": d,
+        })
+
+    jobs.sort(key=lambda j: j["start_day"])
+    return jobs
+
+
+def _current_voyage(jobs, day):
+    """The job whose loading start is the most recent one on/before `day` —
+    or the first job if none has started yet, so the ship still renders,
+    waiting at its true starting position."""
+    if not jobs:
+        return None
+    eligible = [j for j in jobs if j["start_day"] <= day]
+    return max(eligible, key=lambda j: j["start_day"]) if eligible else jobs[0]
+
+
+def _voyage_cargo(job):
+    """The minimal cargo shape get_vessel_state() needs — real for a
+    contract, synthetic for a spot voyage."""
+    return {
+        "laycan_start":     job["loading_start_iso"],
+        "loading_terminal": job["loading_terminal_id"],
+        "volume_mmbtu":     job["volume_mmbtu"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Build map data for a single day
 # ---------------------------------------------------------------------------
 
-def build_day_data(enriched_assignments, vessels, cargoes, terminals, day, vessel_colors, closed_chokepoints=None):
+def build_day_data(current_voyages, terminals, day, vessel_colors, closed_chokepoints=None):
     """Build the Plotly traces for a single simulation day.
+
+    current_voyages: list of {"vessel": vessel_dict, "job": job_dict} — each
+    vessel's CURRENT job for this day, already resolved by _current_voyage().
 
     Single-clock design: the same `day` value drives both the map (this
     function) and the side panel (`get_vessel_state` calls in
@@ -165,35 +241,35 @@ def build_day_data(enriched_assignments, vessels, cargoes, terminals, day, vesse
         closed_chokepoints = set()
 
     sim_start       = datetime(2025, 3, 1)
-    cargoes_by_id   = {c["id"]: c for c in cargoes}
-    vessels_by_id   = {v["id"]: v for v in vessels}
     terminals_by_id = {t["id"]: t for t in terminals}
 
-    # Pre-compute routes for all assignments
+    # Pre-compute routes for all active voyages
     routes_cache = {}
-    for a in enriched_assignments:
-        cargo  = cargoes_by_id[a["cargo_id"]]
-        origin = terminals_by_id[cargo["loading_terminal"]]
-        dest   = terminals_by_id[a["discharge_terminal"]]
+    for cv in current_voyages:
+        job    = cv["job"]
+        origin = terminals_by_id[job["loading_terminal_id"]]
+        dest   = terminals_by_id[job["discharge_terminal_id"]]
         key    = f"{origin['id']}->{dest['id']}"
         if key not in routes_cache:
             routes_cache[key] = build_route(origin, dest, closed_chokepoints)
 
     frame_data = []
 
-    # Dashed route lines — one per vessel, in that vessel's own color
-    for a in enriched_assignments:
-        cargo     = cargoes_by_id[a["cargo_id"]]
-        route_key = f"{cargo['loading_terminal']}->{a['discharge_terminal']}"
+    # Dashed route lines — one per vessel, in that vessel's own color.
+    # Spot voyages get a lighter dash so a scrubbed history still reads as
+    # "opportunistic" rather than a fixed commitment.
+    for cv in current_voyages:
+        job       = cv["job"]
+        route_key = f"{job['loading_terminal_id']}->{job['discharge_terminal_id']}"
         route     = routes_cache[route_key]
-        color     = vessel_colors[a["vessel_id"]]
+        color     = vessel_colors[cv["vessel"]["id"]]
         lats  = [wp[0] for wp in route["waypoints"]]
         lons  = [wp[1] for wp in route["waypoints"]]
         frame_data.append(go.Scattergeo(
             lat=lats, lon=lons,
             mode="lines",
-            line=dict(width=2, color=color, dash="dot"),
-            opacity=0.55,
+            line=dict(width=2, color=color, dash="dot" if job["kind"] == "contract" else "dash"),
+            opacity=0.55 if job["kind"] == "contract" else 0.35,
             showlegend=False, hoverinfo="skip",
         ))
 
@@ -212,18 +288,18 @@ def build_day_data(enriched_assignments, vessels, cargoes, terminals, day, vesse
         ))
 
     # Vessels — glow halo + ship glyph, both in the vessel's own color
-    for a in enriched_assignments:
-        vessel    = vessels_by_id[a["vessel_id"]]
-        cargo     = cargoes_by_id[a["cargo_id"]]
-        route_key = f"{cargo['loading_terminal']}->{a['discharge_terminal']}"
+    for cv in current_voyages:
+        vessel    = cv["vessel"]
+        job       = cv["job"]
+        route_key = f"{job['loading_terminal_id']}->{job['discharge_terminal_id']}"
         route     = routes_cache[route_key]
-        state     = get_vessel_state(vessel, cargo, route, day, sim_start, a["discharge_terminal"])
-        color     = vessel_colors[a["vessel_id"]]
+        state     = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, job["discharge_terminal_id"])
+        color     = vessel_colors[vessel["id"]]
 
         hover = (
             f"<b>{vessel['id']}</b><br>"
             f"Class: {vessel['vessel_class']}<br>"
-            f"Cargo: {cargo['id']}<br>"
+            f"{job['label']}<br>"
             f"Phase: {state['phase']}<br>"
             f"Fill: {round(state['fill']*100,1)}%<br>"
             f"Volume: {state['volume']:,.0f} mmBtu<extra></extra>"
@@ -260,35 +336,41 @@ def _fill_bar_html(color, fill_pct):
     """
 
 
-def _why_this_route(cargo, candidates):
-    """One compact line explaining why this destination was chosen.
+def _job_why_text(job):
+    """One compact line explaining why this vessel is where it is.
 
-    FOB cargoes have a fixed destination — there's no real choice. DES
-    cargoes are flexible: if a second candidate destination existed, the
-    winning margin delta over it is the explanation. `candidates` is the
-    list already computed by core.pnl.enrich_assignments_with_pnl — reused
-    here rather than recomputed, so the panel always agrees with the price
-    the rest of the app used.
+    Contract jobs: FOB has a fixed destination — no real choice. DES's
+    margin delta over the runner-up explains the choice (candidates come
+    from core.pnl.enrich_assignments_with_pnl, reused rather than
+    recomputed so the panel always agrees with the price the rest of the
+    app used). Spot jobs: the buy/sell spread that made it worth sending.
     """
-    if cargo.get("discharge_terminal"):
+    if job["kind"] == "spot":
+        d = job["decision"]
+        return (f"Bought {d['buy_marker']} @ ${d['buy_price_usd_mmbtu']:.2f}, "
+                f"selling {d['sell_marker']} @ ${d['expected_sell_price_usd_mmbtu']:.2f} (expected)")
+
+    if job["contract_type"] == "FOB":
         return "Fixed destination (FOB contract)"
 
+    candidates = job["candidates"]
     if len(candidates) > 1:
         best, second = candidates[0], candidates[1]
         delta = (best["net_margin_usd"] - second["net_margin_usd"]) / 1e6
         return f"{best['destination_id']} chosen (+{delta:.1f}M$ vs {second['destination_id']})"
-
     return None
 
 
-def _render_vessel_card(vessel, color, state, why=None):
+def _render_vessel_card(vessel, color, state, job):
     bog_rate_pct = BOILOFF_RATE[vessel["vessel_class"]] * 100
     fill_pct = max(0.0, min(100.0, state["fill"] * 100))
+    kind_badge = badge_html(job["label"], "#a99bff" if job["kind"] == "spot" else "#7fd4ff")
 
     st.markdown(
         f"<div style='font-weight:600;color:{color};font-size:0.95rem;'>{vessel['id']}</div>"
         f"<div style='color:{MUTED_INK};font-size:0.75rem;margin-bottom:4px;'>"
-        f"{vessel['vessel_class']} · {state['phase']}</div>",
+        f"{vessel['vessel_class']} · {state['phase']}</div>"
+        f"<div style='margin-bottom:4px;'>{kind_badge}</div>",
         unsafe_allow_html=True,
     )
     st.markdown(_fill_bar_html(color, fill_pct), unsafe_allow_html=True)
@@ -300,6 +382,7 @@ def _render_vessel_card(vessel, color, state, why=None):
         f"</div>",
         unsafe_allow_html=True,
     )
+    why = _job_why_text(job)
     if why:
         st.markdown(
             f"<div style='color:{MUTED_INK};font-size:0.68rem;margin-top:3px;'>{why}</div>",
@@ -385,6 +468,69 @@ def _render_contracts_panel(day, enriched, unassigned, vessels, cargoes, termina
 
 
 # ---------------------------------------------------------------------------
+# Spot voyages panel — same table style as Contracts, same `day` clock.
+# Unlike Contracts (all 6 cargoes, always), this only lists voyages
+# core/spot.py actually dispatched this run.
+# ---------------------------------------------------------------------------
+
+def _spot_rows(day, spot_decisions, vessels, terminals, sim_start):
+    vessels_by_id   = {v["id"]: v for v in vessels}
+    terminals_by_id = {t["id"]: t for t in terminals}
+
+    rows = []
+    for d in spot_decisions:
+        if day < d["dispatch_day"]:
+            status = "Not yet dispatched"
+        else:
+            vessel = vessels_by_id[d["vessel_id"]]
+            job = {
+                "loading_terminal_id":   d["load_terminal_id"],
+                "discharge_terminal_id": d["discharge_terminal_id"],
+                "volume_mmbtu":          d["volume_mmbtu"],
+                "loading_start_iso": (sim_start + timedelta(
+                    days=d["dispatch_day"] + d["ballast_days"])).isoformat(timespec="minutes"),
+            }
+            route = build_route(terminals_by_id[d["load_terminal_id"]], terminals_by_id[d["discharge_terminal_id"]])
+            state = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, d["discharge_terminal_id"])
+            status = PHASE_LABEL[state["phase"]]
+
+        settled = day >= d["arrival_day"]
+        rows.append({
+            "Vessel": d["vessel_id"], "Dispatch day": d["dispatch_day"],
+            "Route": f"{d['load_terminal_id']} → {d['discharge_terminal_id']}",
+            "Status": status,
+            "Margin (expected) ($)": d["expected_margin_usd"],
+            "Margin (realized) ($)": d["realized_margin_usd"] if settled else None,
+            "Outcome": d["outcome"].upper() if settled else "Pending",
+        })
+
+    rows.sort(key=lambda r: r["Dispatch day"])
+    return rows
+
+
+def _render_spot_panel(day, spot_sim, vessels, terminals):
+    st.divider()
+    st.subheader("Spot voyages")
+    st.caption(f"Status as of Day {day} — same clock as the map above. Full book on the Spot Trading page.")
+
+    if not spot_sim["decisions"]:
+        st.info("No spot voyages dispatched this month.")
+        return
+
+    rows = _spot_rows(day, spot_sim["decisions"], vessels, terminals, datetime(2025, 3, 1))
+    df = pd.DataFrame(rows)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Margin (expected) ($)": st.column_config.NumberColumn(format="$%,.0f"),
+            "Margin (realized) ($)": st.column_config.NumberColumn(format="$%,.0f"),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 
@@ -438,20 +584,37 @@ def render_map():
     if st.sidebar.checkbox("🔴 Close Panama Canal"):
         closed.add("PANAMA")
 
-    result      = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
-    enriched    = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
-    assignments = [a for a in enriched
-                   if a["feasible"] and any(v["id"] == a["vessel_id"] and v["vessel_class"] in filter_class
-                          for v in VESSELS)]
+    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
+    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
+    spot_sim = simulate_spot_market(VESSELS, TERMINALS, CARGOES, enriched, n_days=SPOT_HORIZON_DAYS)
 
-    if not assignments:
-        st.warning("No assignments to display.")
+    sim_start          = datetime(2025, 3, 1)
+    cargoes_by_id      = {c["id"]: c for c in CARGOES}
+    contract_by_vessel = {a["vessel_id"]: a for a in enriched if a["feasible"]}
+    spot_by_vessel = {}
+    for d in spot_sim["decisions"]:
+        spot_by_vessel.setdefault(d["vessel_id"], []).append(d)
+
+    # One "current voyage" per vessel for this day — contract or spot,
+    # whichever is the vessel's most recently started job (see
+    # _current_voyage). A vessel with neither simply isn't drawn, same as
+    # before this feature existed.
+    current_voyages = []
+    for v in VESSELS:
+        if v["vessel_class"] not in filter_class:
+            continue
+        jobs = _vessel_voyages(v["id"], contract_by_vessel.get(v["id"]), cargoes_by_id, spot_by_vessel, sim_start)
+        current = _current_voyage(jobs, day)
+        if current is not None:
+            current_voyages.append({"vessel": v, "job": current})
+
+    if not current_voyages:
+        st.warning("No vessels to display.")
         return
 
-    vessel_colors = assign_vessel_colors([a["vessel_id"] for a in assignments])
+    vessel_colors = assign_vessel_colors([cv["vessel"]["id"] for cv in current_voyages])
 
-    frame_data, routes_cache = build_day_data(
-        assignments, VESSELS, CARGOES, TERMINALS, day, vessel_colors, closed)
+    frame_data, routes_cache = build_day_data(current_voyages, TERMINALS, day, vessel_colors, closed)
 
     current_date = datetime(2025, 3, 1) + timedelta(days=day)
 
@@ -483,18 +646,13 @@ def render_map():
     with col_panel:
         st.markdown("**Fleet**")
 
-        sim_start = datetime(2025, 3, 1)
-        cargoes_by_id   = {c["id"]: c for c in CARGOES}
-        vessels_by_id   = {v["id"]: v for v in VESSELS}
-
-        for a in assignments:
-            vessel = vessels_by_id[a["vessel_id"]]
-            cargo  = cargoes_by_id[a["cargo_id"]]
-            route_key = f"{cargo['loading_terminal']}->{a['discharge_terminal']}"
-            route = routes_cache[route_key]
-            state = get_vessel_state(vessel, cargo, route, day, sim_start, a["discharge_terminal"])
-            why = _why_this_route(cargo, a["candidates"])
-            _render_vessel_card(vessel, vessel_colors[a["vessel_id"]], state, why)
+        for cv in current_voyages:
+            vessel    = cv["vessel"]
+            job       = cv["job"]
+            route_key = f"{job['loading_terminal_id']}->{job['discharge_terminal_id']}"
+            route     = routes_cache[route_key]
+            state     = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, job["discharge_terminal_id"])
+            _render_vessel_card(vessel, vessel_colors[vessel["id"]], state, job)
 
     # Disruption impact
     if closed:
@@ -507,6 +665,7 @@ def render_map():
                          f"destination given closed chokepoints")
 
     _render_contracts_panel(day, enriched, result["unassigned"], VESSELS, CARGOES, TERMINALS, closed)
+    _render_spot_panel(day, spot_sim, VESSELS, TERMINALS)
 
     # Play/Pause auto-advance — a full Streamlit rerun per tick keeps the map
     # and side panel on the same `day` clock (no Plotly-side animation, so no
