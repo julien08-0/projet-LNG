@@ -28,6 +28,7 @@ from core.routing    import build_route
 from core.physics    import calculate_boiloff
 from config          import BOILOFF_RATE
 from ui.fleet_state  import get_fleet
+from ui.gantt        import render_gantt_chart
 from ui.theme        import (inject_dark_theme, PAGE_BG, CHART_BG, VESSEL_PALETTE,
                               TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR)
 
@@ -507,6 +508,9 @@ def render_map():
                          f"destination given closed chokepoints")
 
     _render_contracts_panel(day, enriched, result["unassigned"], VESSELS, CARGOES, TERMINALS, closed)
+
+    with st.expander("📅 Schedule view (Gantt)"):
+        render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])
 
     # Play/Pause auto-advance — a full Streamlit rerun per tick keeps the map
     # and side panel on the same `day` clock (no Plotly-side animation, so no

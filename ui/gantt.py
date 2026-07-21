@@ -1,6 +1,12 @@
 # ui/gantt.py
-# Gantt chart: 30-day vessel schedule.
+# Gantt chart: vessel schedule over the horizon.
 # Green = on time, Orange = tight window, Red = delivery window breached.
+#
+# Doesn't carry enough on its own to justify a standalone nav page — it's
+# the same fleet/contracts as the Fleet Map, just viewed on a time axis
+# instead of a geographic one. Embedded there (in an expander) via
+# render_gantt_chart(), which takes the assignments already computed by
+# the caller so it reflects the same disruption scenario, not a fresh one.
 
 import sys
 import os
@@ -10,16 +16,9 @@ import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-from data.vessels    import VESSELS
-from data.cargoes    import CARGOES
-from data.terminals  import TERMINALS
-from core.optimizer  import assign_cargoes
-from core.pnl        import enrich_assignments_with_pnl
 from core.routing    import build_route
 from core.physics    import calculate_eta
-from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, PAGE_BG, TEXT_MUTED,
-                              STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL)
+from ui.theme        import PAGE_BG, TEXT_MUTED, STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL
 
 
 def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
@@ -76,14 +75,11 @@ def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
     return bars
 
 
-def render_gantt():
-    inject_dark_theme()
-    st.title("Cargo Schedule — Gantt View")
-
-    VESSELS = get_fleet()
-    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
-    bars     = build_gantt_data(enriched, CARGOES, VESSELS, TERMINALS)
+def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
+    """Draws the Gantt figure + legend + unassigned list. No title/theme
+    injection — meant to be embedded inside another page's layout (e.g.
+    inside an expander on the Fleet Map)."""
+    bars = build_gantt_data(enriched, cargoes, vessels, terminals)
 
     fig = go.Figure()
 
@@ -136,7 +132,22 @@ def render_gantt():
     col2.warning("🟠 Early / tight")
     col3.error("🔴 Delivery window breached")
 
-    if result["unassigned"]:
+    if unassigned:
         st.subheader("Unassigned cargoes")
-        for u in result["unassigned"]:
+        for u in unassigned:
             st.error(f"**{u['cargo_id']}** — {u['reason']}")
+
+
+if __name__ == "__main__":
+    from data.vessels    import VESSELS
+    from data.cargoes    import CARGOES
+    from data.terminals  import TERMINALS
+    from core.optimizer  import assign_cargoes
+    from core.pnl        import enrich_assignments_with_pnl
+    from ui.theme        import inject_dark_theme
+
+    inject_dark_theme()
+    st.title("Gantt (standalone preview)")
+    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
+    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])

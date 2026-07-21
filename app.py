@@ -11,7 +11,6 @@ st.set_page_config(
 )
 
 from ui.overview   import render_overview
-from ui.gantt      import render_gantt
 from ui.map        import render_map
 from ui.alerts     import render_alerts
 from ui.kpi        import render_kpi
@@ -22,7 +21,6 @@ from ui.spot       import render_spot
 
 page = st.sidebar.selectbox("Navigation", [
     "Overview",
-    "Gantt Schedule",
     "Fleet Map",
     "Alerts",
     "KPI Dashboard",
@@ -34,8 +32,6 @@ page = st.sidebar.selectbox("Navigation", [
 
 if page == "Overview":
     render_overview()
-elif page == "Gantt Schedule":
-    render_gantt()
 elif page == "Fleet Map":
     render_map()
 elif page == "Alerts":

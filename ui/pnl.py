@@ -1,8 +1,8 @@
 # ui/pnl.py
 # P&L page: economic destination decisions per cargo.
-# One clean result line per cargo (vessel -> destination -> margin), the
-# full destination comparison only shown on demand — the comparison is the
-# reasoning, not the headline.
+# The bar chart carries the hierarchy (which cargo makes the most money,
+# at a glance, by bar length) — the rows below are detail, not a second
+# attempt at the same comparison.
 
 import sys
 import os
@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 
 from data.vessels    import VESSELS
 from data.terminals  import TERMINALS
@@ -17,7 +18,7 @@ from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl, format_decision_text
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, hero_metric, badge_html, SURFACE, BORDER,
+from ui.theme        import (inject_dark_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
                               TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING)
 
 
@@ -38,43 +39,48 @@ def candidates_to_dataframe(candidates):
     return pd.DataFrame(rows)
 
 
-def _result_row(cargo, a):
+def _margin_chart(feasible_sorted):
+    """One bar per assigned cargo, sorted by margin — the ranking IS the point,
+    so length does the work instead of asking the reader to compare numbers."""
+    labels  = [f"{a['cargo_id']} · {a['vessel_id']}" for a in feasible_sorted]
+    values  = [a["margin"]["net_margin_usd"] / 1e6 for a in feasible_sorted]
+    colors  = [STATUS_GOOD if v >= 0 else STATUS_CRITICAL for v in values]
+
+    fig = go.Figure(go.Bar(
+        x=values, y=labels, orientation="h",
+        marker_color=colors,
+        text=[f"${v:,.1f}M" for v in values],
+        textposition="outside",
+        hoverinfo="skip",
+    ))
+    fig.update_layout(
+        paper_bgcolor=PAGE_BG, plot_bgcolor=CHART_BG,
+        font=dict(color=TEXT_MUTED),
+        margin=dict(l=10, r=50, t=10, b=10),
+        height=80 + 40 * len(labels),
+        xaxis=dict(title="Net margin ($M)", gridcolor=BORDER),
+        yaxis=dict(autorange="reversed"),
+    )
+    return fig
+
+
+def _detail_row(cargo, a):
     flexible = cargo["discharge_terminal"] is None
     type_color = "#a99bff" if flexible else "#7fd4ff"
     type_label = "DES" if flexible else "FOB"
 
-    if not a["feasible"]:
-        st.markdown(
-            f"<div style='background:{SURFACE};border:1px solid {BORDER};border-radius:10px;"
-            f"padding:12px 16px;margin-bottom:8px;'>"
-            f"{badge_html(a['cargo_id'], type_color)} {badge_html(type_label, TEXT_MUTED)} "
-            f"<span style='color:{STATUS_CRITICAL};margin-left:8px;'>No feasible destination "
-            f"(draft incompatible or route blocked at every candidate)</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        return
-
-    margin = a["margin"]["net_margin_usd"]
-    margin_color = STATUS_GOOD if margin >= 0 else STATUS_CRITICAL
-
     st.markdown(
-        f"<div style='background:{SURFACE};border:1px solid {BORDER};border-radius:10px;"
-        f"padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;"
-        f"justify-content:space-between;flex-wrap:wrap;gap:8px;'>"
-        f"<div>{badge_html(a['cargo_id'], type_color)} {badge_html(type_label, TEXT_MUTED)} "
-        f"<span style='color:{TEXT_PRIMARY};margin-left:6px;'>{a['vessel_id']} → "
-        f"<b>{a['discharge_terminal']}</b></span></div>"
-        f"<div style='color:{margin_color};font-weight:700;font-size:1.1rem;'>"
-        f"${margin/1e6:,.1f}M</div>"
-        f"</div>",
+        f"<div style='font-size:0.85rem;color:{TEXT_MUTED};margin-bottom:2px;'>"
+        f"{badge_html(a['cargo_id'], type_color)} {badge_html(type_label, TEXT_MUTED)} "
+        f"<span style='color:{TEXT_PRIMARY};margin-left:4px;'>{a['vessel_id']} → "
+        f"{a['discharge_terminal']}</span></div>",
         unsafe_allow_html=True,
     )
-
     if len(a["candidates"]) > 1:
-        with st.expander(f"Compare {len(a['candidates'])} candidate destinations"):
+        with st.expander(f"{a['cargo_id']}: compare {len(a['candidates'])} candidate destinations"):
             st.dataframe(candidates_to_dataframe(a["candidates"]), use_container_width=True, hide_index=True)
             st.code(format_decision_text(a["cargo_id"], {"chosen": a["margin"], "candidates": a["candidates"]}))
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
 
 
 def render_pnl():
@@ -87,15 +93,30 @@ def render_pnl():
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
     cargoes_by_id = {c["id"]: c for c in CARGOES}
 
-    total_margin = sum(a["margin"]["net_margin_usd"] for a in enriched if a["feasible"])
+    feasible = [a for a in enriched if a["feasible"]]
+    infeasible = [a for a in enriched if not a["feasible"]]
+    total_margin = sum(a["margin"]["net_margin_usd"] for a in feasible)
+
     hero_metric("Total fleet net margin", f"${total_margin/1e6:,.1f}M",
                 accent=STATUS_GOOD if total_margin >= 0 else STATUS_CRITICAL)
 
-    st.divider()
+    feasible_sorted = sorted(feasible, key=lambda a: a["margin"]["net_margin_usd"], reverse=True)
+    st.plotly_chart(_margin_chart(feasible_sorted), use_container_width=True)
 
-    for a in enriched:
-        cargo = cargoes_by_id[a["cargo_id"]]
-        _result_row(cargo, a)
+    st.divider()
+    st.subheader("Detail")
+
+    for a in feasible_sorted:
+        _detail_row(cargoes_by_id[a["cargo_id"]], a)
+
+    for a in infeasible:
+        st.markdown(
+            f"<div style='font-size:0.85rem;margin-bottom:6px;'>"
+            f"{badge_html(a['cargo_id'], STATUS_CRITICAL)} "
+            f"<span style='color:{STATUS_CRITICAL};'>No feasible destination "
+            f"(draft incompatible or route blocked at every candidate)</span></div>",
+            unsafe_allow_html=True,
+        )
 
     if result["unassigned"]:
         st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
