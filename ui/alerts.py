@@ -1,6 +1,11 @@
 # ui/alerts.py
-# Alerts panel: detected conflicts across all assignments.
+# Alerts: detected conflicts across all assignments.
 # Severity: CRITICAL (red), WARNING (orange), INFO (blue).
+#
+# Doesn't carry enough on its own to justify a standalone nav page — it's
+# a diagnostic on the same assignments the KPI Dashboard already computes.
+# Embedded there (bottom of the page) via render_alerts_section(), which
+# takes the alert list already detected by the caller.
 
 import sys
 import os
@@ -10,16 +15,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-from data.vessels   import VESSELS
-from data.terminals import TERMINALS
-from data.cargoes   import CARGOES
-
-from core.optimizer  import assign_cargoes
 from core.physics    import calculate_eta
-from core.routing    import build_route, haversine_nm
+from core.routing    import haversine_nm
 from core.constraints import check_draft_compatibility, check_laycan_compliance, check_slot_overlap
-from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def detect_alerts(assignments, cargoes, vessels, terminals):
@@ -124,37 +122,27 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
     return alerts
 
 
-def render_alerts():
-    inject_dark_theme()
-    st.title("Alerts & Conflicts")
-
-    VESSELS = get_fleet()
-    result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
-    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
-
+def render_alerts_section(alerts):
+    """Compact alerts block — embedded at the bottom of the KPI Dashboard,
+    not a standalone page. No title/hero: the parent page already has one."""
     critical = [a for a in alerts if a["severity"] == "CRITICAL"]
     warnings = [a for a in alerts if a["severity"] == "WARNING"]
     infos    = [a for a in alerts if a["severity"] == "INFO"]
 
-    hero_metric(
-        "Critical alerts",
-        str(len(critical)),
-        sublabel=f"{len(warnings)} warnings · {len(infos)} info",
-        accent=STATUS_CRITICAL if critical else STATUS_GOOD,
-    )
+    st.subheader("Alerts & Conflicts")
 
     if not alerts:
         st.success("No alerts detected — all assignments are valid.")
         return
 
+    st.caption(f"{len(critical)} critical · {len(warnings)} warnings · {len(infos)} info")
+
     def _table(rows):
         return pd.DataFrame([{"Cargo": a["cargo_id"], "Vessel": a["vessel_id"], "Message": a["message"]}
                               for a in rows])
 
-    if critical:
-        st.subheader("Critical — needs a decision now")
-        for a in critical:
-            st.error(f"**{a['cargo_id']} / {a['vessel_id']}** — {a['message']}")
+    for a in critical:
+        st.error(f"**{a['cargo_id']} / {a['vessel_id']}** — {a['message']}")
 
     if warnings:
         st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
@@ -167,4 +155,14 @@ def render_alerts():
 
 
 if __name__ == "__main__":
-    render_alerts()
+    from data.vessels   import VESSELS
+    from data.terminals import TERMINALS
+    from data.cargoes   import CARGOES
+    from core.optimizer import assign_cargoes
+    from ui.theme       import inject_dark_theme
+
+    inject_dark_theme()
+    st.title("Alerts (standalone preview)")
+    result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
+    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    render_alerts_section(alerts)

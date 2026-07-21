@@ -12,6 +12,7 @@ from data.terminals  import TERMINALS
 from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
+from ui.alerts       import detect_alerts, render_alerts_section
 from ui.fleet_state  import get_fleet
 from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
@@ -80,12 +81,6 @@ def render_kpi():
     col2.metric("Net BOG cost",
                 f"${kpis['total_bog_usd'] - kpis['total_bunker_saving_usd']:,.0f}")
 
-    if result["unassigned"] or any(not a["feasible"] for a in enriched):
-        st.divider()
-        st.subheader("Unassigned / infeasible cargoes")
-        for u in result["unassigned"]:
-            st.warning(f"**{u['cargo_id']}** — {u['reason']}")
-        for a in enriched:
-            if not a["feasible"]:
-                st.warning(f"**{a['cargo_id']}** — assigned to {a['vessel_id']} "
-                           f"but no feasible destination (draft/route)")
+    st.divider()
+    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    render_alerts_section(alerts)

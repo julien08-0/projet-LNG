@@ -48,16 +48,17 @@ def _margin_chart(feasible_sorted):
 
     fig = go.Figure(go.Bar(
         x=values, y=labels, orientation="h",
-        marker_color=colors,
+        marker=dict(color=colors, opacity=0.9, line=dict(width=0)),
         text=[f"${v:,.1f}M" for v in values],
         textposition="outside",
         hoverinfo="skip",
     ))
     fig.update_layout(
+        bargap=0.5,
         paper_bgcolor=PAGE_BG, plot_bgcolor=CHART_BG,
         font=dict(color=TEXT_MUTED),
         margin=dict(l=10, r=50, t=10, b=10),
-        height=80 + 40 * len(labels),
+        height=70 + 38 * len(labels),
         xaxis=dict(title="Net margin ($M)", gridcolor=BORDER),
         yaxis=dict(autorange="reversed"),
     )

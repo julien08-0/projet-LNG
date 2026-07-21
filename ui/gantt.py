@@ -90,7 +90,7 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
             y=[bar["vessel"]],
             base=[(bar["loading_start"] - datetime(2025, 3, 1)).total_seconds() / 86400],
             orientation="h",
-            marker_color="#378ADD",
+            marker=dict(color="#378ADD", opacity=0.75, line=dict(width=0)),
             hovertemplate=(
                 f"<b>{bar['cargo']}</b><br>"
                 f"Loading: {bar['loading_start'].strftime('%b %d %H:%M')} → "
@@ -106,7 +106,7 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
             y=[bar["vessel"]],
             base=[(bar["loading_end"] - datetime(2025, 3, 1)).total_seconds() / 86400],
             orientation="h",
-            marker_color=color_map[bar["color"]],
+            marker=dict(color=color_map[bar["color"]], opacity=0.9, line=dict(width=0)),
             hovertemplate=(
                 f"<b>{bar['cargo']}</b><br>"
                 f"Discharge: {bar['discharge_start'].strftime('%b %d %H:%M')} → "
@@ -117,12 +117,14 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
 
     fig.update_layout(
         barmode="stack",
-        xaxis=dict(title="Days from March 1, 2025", range=[0, 45]),
-        yaxis=dict(title="Vessel"),
-        height=400,
+        bargap=0.55,
+        xaxis=dict(title="Days from March 1, 2025", range=[0, 45], gridcolor="#22242c"),
+        yaxis=dict(title=None),
+        height=70 + 42 * len({bar["vessel"] for bar in bars}),
+        margin=dict(l=10, r=10, t=10, b=40),
         plot_bgcolor=PAGE_BG,
         paper_bgcolor=PAGE_BG,
-        font=dict(color=TEXT_MUTED),
+        font=dict(color=TEXT_MUTED, size=12),
     )
 
     st.plotly_chart(fig, use_container_width=True)
