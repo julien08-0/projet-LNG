@@ -71,5 +71,23 @@ def inject_dark_theme():
     header[data-testid="stHeader"] {{ background-color: {PAGE_BG}; }}
     section[data-testid="stSidebar"] {{ background-color: {SURFACE}; }}
     section[data-testid="stSidebar"] * {{ color: {TEXT_PRIMARY}; }}
+
+    /* st.metric ships its own text color tuned for Streamlit's light theme —
+       it doesn't inherit .stApp's color, so on a forced-dark background it
+       renders as near-invisible dark grey without these overrides. */
+    [data-testid="stMetricValue"] {{ color: {TEXT_PRIMARY} !important; }}
+    [data-testid="stMetricLabel"] {{ color: {TEXT_MUTED} !important; }}
+    [data-testid="stMetricDelta"] {{ color: inherit !important; }}
+
+    /* Expander header keeps a light chrome by default; match the rest of
+       the dark surfaces so it doesn't read as an unstyled foreign widget. */
+    [data-testid="stExpander"] summary {{
+        background-color: {SURFACE}; color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER}; border-radius: 8px;
+    }}
+    [data-testid="stExpander"] summary:hover {{ color: {TEXT_PRIMARY}; }}
+    [data-testid="stExpander"] div[data-testid="stExpanderDetails"] {{
+        background-color: {PAGE_BG};
+    }}
     </style>
     """, unsafe_allow_html=True)
