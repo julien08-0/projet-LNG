@@ -13,6 +13,7 @@ from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
 from ui.alerts       import detect_alerts, render_alerts_section
+from ui.gantt        import render_gantt_chart
 from ui.fleet_state  import get_fleet
 from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
@@ -27,7 +28,6 @@ def compute_kpis(enriched_assignments, cargoes, vessels):
     feasible             = [a for a in enriched_assignments if a["feasible"]]
     feasible_cargo_ids   = {a["cargo_id"] for a in feasible}
 
-    fleet_utilization = len(assigned_vessel_ids) / len(vessels) * 100
     total_volume      = sum(c["volume_mmbtu"] for c in cargoes if c["id"] in feasible_cargo_ids)
 
     total_bog_mmbtu   = sum(a["margin"]["gross_bog_mmbtu"]   for a in feasible)
@@ -36,7 +36,15 @@ def compute_kpis(enriched_assignments, cargoes, vessels):
     total_net_margin  = sum(a["margin"]["net_margin_usd"]    for a in feasible)
 
     return {
-        "fleet_utilization_pct":   round(fleet_utilization, 1),
+        # Two different denominators on purpose: a vessel is "deployed" once
+        # it's working a cargo; a cargo is "covered" once a vessel is working
+        # it. With more cargoes than vessels, 100% vessel deployment can
+        # still leave a cargo uncovered — that's not a contradiction, see
+        # the caption in render_kpi().
+        "vessels_deployed":        len(assigned_vessel_ids),
+        "vessels_total":           len(vessels),
+        "cargoes_covered":         len(feasible_cargo_ids),
+        "cargoes_total":           len(cargoes),
         "total_volume_mmbtu":      round(total_volume, 0),
         "total_bog_mmbtu":         round(total_bog_mmbtu, 0),
         "total_bog_usd":           round(total_bog_usd, 0),
@@ -61,9 +69,16 @@ def render_kpi():
     st.divider()
     st.subheader("Fleet")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Fleet utilization",  f"{kpis['fleet_utilization_pct']}%")
-    col2.metric("Cargoes deliverable", f"{len(CARGOES) - kpis['unassigned_count']} / {len(CARGOES)}")
+    col1.metric("Vessels deployed", f"{kpis['vessels_deployed']} / {kpis['vessels_total']}")
+    col2.metric("Cargoes covered",  f"{kpis['cargoes_covered']} / {kpis['cargoes_total']}")
     col3.metric("Unassigned cargoes", kpis["unassigned_count"])
+    if kpis["vessels_deployed"] == kpis["vessels_total"] and kpis["unassigned_count"] > 0:
+        st.caption(
+            "Every vessel is deployed (100% of the fleet) and a cargo is still "
+            "unassigned — not a contradiction: there are more cargoes than "
+            "vessels this month, so full fleet deployment is the ceiling, not "
+            "full cargo coverage. See the alert below for which one and why."
+        )
 
     st.divider()
 
@@ -84,3 +99,7 @@ def render_kpi():
     st.divider()
     alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
     render_alerts_section(alerts)
+
+    st.divider()
+    with st.expander("📅 Schedule view (Gantt)"):
+        render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])
