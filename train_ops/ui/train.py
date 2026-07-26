@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 
 from train_ops.data.trains          import TRAINS
 from train_ops.config               import LNG_DENSITY_KG_PER_M3, DAYS_PER_YEAR
-from train_ops.core.forecast        import run_fleet_forecast
+from train_ops.core.forecast        import run_fleet_forecast, calculate_availability
 from train_ops.core.cargo_generator import generate_fleet_cargoes
 from config                         import LNG_ENERGY_DENSITY_MMBTU_PER_M3
 from ui.theme import (inject_dark_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
@@ -90,13 +90,16 @@ def render_train():
         sublabel=f"≈ {total_tonnes:,.0f} tonnes LNG · {len(cargoes)} cargo(es) generated",
     )
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Trains modeled", len(TRAINS))
-    maintenance_days = sum(
-        1 for days in fleet["by_train"].values() for d in days if "Maintenance" in d["status"]
+    avg_availability = sum(calculate_availability(days) for days in fleet["by_train"].values()) / len(TRAINS)
+    downtime_days = sum(
+        1 for days in fleet["by_train"].values() for d in days if d["produced_mmbtu"] == 0.0
     )
-    col2.metric("Maintenance days (any train)", maintenance_days)
-    col3.metric("Price used for load-factor decision", f"${fleet['price_usd_mmbtu']}/mmBtu")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Trains modeled", len(TRAINS))
+    col2.metric("Availability (fleet avg)", f"{avg_availability*100:.1f}%")
+    col3.metric("Downtime days (maint. + unplanned)", downtime_days)
+    col4.metric("Price used for load-factor decision", f"${fleet['price_usd_mmbtu']}/mmBtu")
     st.caption(f"Price source: {fleet['price_source']}")
 
     st.divider()
@@ -106,13 +109,30 @@ def render_train():
     for train in TRAINS:
         days = fleet["by_train"][train["id"]]
         live_days = sum(1 for d in days if "live" in d["weather_source"])
+        availability = calculate_availability(days)
         st.markdown(
             f"<div style='font-size:0.85rem;color:{TEXT_MUTED};margin-bottom:4px;'>"
             f"{badge_html(train['id'], TEXT_MUTED)} {train['name']} · "
             f"{train['capacity_mtpa']} MTPA nameplate · breakeven ${train['breakeven_usd_mmbtu']}/mmBtu · "
+            f"availability {availability*100:.1f}% · "
             f"{live_days}/{len(days)} days on real weather, rest on seasonal average</div>",
             unsafe_allow_html=True,
         )
+
+        unplanned = [d for d in days if "Unplanned" in d["status"] and "started" in d["status"]]
+        for d in unplanned:
+            repair_detail = d["status"].split("—")[-1].strip()
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:{STATUS_WARNING};margin:2px 0 2px 8px;'>"
+                f"⚠ Unplanned trip — day {d['day']} ({d['date']}), {repair_detail}</div>",
+                unsafe_allow_html=True,
+            )
+        for window in train["maintenance_windows"]:
+            st.markdown(
+                f"<div style='font-size:0.8rem;color:{TEXT_MUTED};margin:2px 0 2px 8px;'>"
+                f"🔧 Planned — day {window['start_day']}, {window['duration_days']}d, {window['label']}</div>",
+                unsafe_allow_html=True,
+            )
 
     st.divider()
     st.subheader("Generated cargoes")

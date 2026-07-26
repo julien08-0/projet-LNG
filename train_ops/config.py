@@ -52,6 +52,24 @@ DEFAULT_BREAKEVEN_USD_MMBTU = 3.0
 BREAKEVEN_SAFETY_MARGIN     = 1.15   # price must clear breakeven x this to run at max
 
 # ---------------------------------------------------------------------------
+# Reliability — unplanned outages, distinct from the planned maintenance
+# windows in data/trains.py. Real trains don't only stop on a calendar:
+# equipment trips (compressor trip, power loss, safety-system trip) happen
+# at random. Modeled the same way core/spot.py already models price
+# uncertainty: a seeded random draw, reproducible run to run, never
+# fabricating which day a trip lands on ahead of simulating it.
+#
+# ~1%/day while operating, repaired in 1-5 days, works out to roughly
+# 3-4 unplanned events/year — in the same range commonly cited for LNG
+# train unplanned-downtime targets (a few % of the year).
+# ---------------------------------------------------------------------------
+
+UNPLANNED_TRIP_DAILY_PROBABILITY = 0.01
+UNPLANNED_REPAIR_MIN_DAYS        = 1
+UNPLANNED_REPAIR_MAX_DAYS        = 5
+RELIABILITY_SEED                 = 7
+
+# ---------------------------------------------------------------------------
 # Cargo generation — how continuous production becomes discrete cargoes
 # the existing scheduler (core.optimizer.assign_cargoes) can consume.
 # ---------------------------------------------------------------------------
@@ -97,6 +115,11 @@ if __name__ == "__main__":
     print("\n-- Breakeven --")
     print(f"  Default breakeven : ${DEFAULT_BREAKEVEN_USD_MMBTU}/mmBtu")
     print(f"  Safety margin     : x{BREAKEVEN_SAFETY_MARGIN}")
+
+    print("\n-- Reliability --")
+    print(f"  Unplanned trip probability : {UNPLANNED_TRIP_DAILY_PROBABILITY*100:.1f}%/day while operating")
+    print(f"  Repair duration             : {UNPLANNED_REPAIR_MIN_DAYS}-{UNPLANNED_REPAIR_MAX_DAYS} days")
+    print(f"  Seed                        : {RELIABILITY_SEED}")
 
     print("\n-- Cargo generation --")
     print(f"  Cargo size        : {CARGO_SIZE_MMBTU:,.0f} mmBtu")
