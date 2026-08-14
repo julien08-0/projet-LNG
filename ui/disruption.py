@@ -21,7 +21,7 @@ from core.disruption import (
     simulate_disruption_impact,
 )
 from ui.fleet_state import get_fleet
-from ui.theme       import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
+from ui.theme       import inject_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def _render_impact_summary(impact):
@@ -71,7 +71,7 @@ def _render_cargo_diff_table(impact):
 
 
 def render_disruption():
-    inject_dark_theme()
+    inject_theme()
     st.title("Disruption Simulator")
     st.caption("$ impact on fleet-wide net margin, before vs after the scenario.")
 

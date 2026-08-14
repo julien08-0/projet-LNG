@@ -14,12 +14,12 @@ import streamlit as st
 from data.vessels   import VESSELS
 from data.terminals import TERMINALS
 from ui.fleet_state import get_fleet, add_vessel, remove_vessel, reset_fleet, VALID_VESSEL_CLASSES
-from ui.theme       import inject_dark_theme
-from config import DEFAULT_SPEED_KNOTS
+from ui.theme       import inject_theme
+from config import DEFAULT_LADEN_SPEED_KNOTS, BALLAST_SPEED_BONUS_KNOTS
 
 
 def render_fleet():
-    inject_dark_theme()
+    inject_theme()
     st.title("Fleet Management")
     st.caption("Add vessels for this session — they appear immediately on every other page.")
 
@@ -32,7 +32,9 @@ def render_fleet():
         col3, col4 = st.columns(2)
         terminal_id = col3.selectbox("Starting port", [t["id"] for t in TERMINALS],
                                       format_func=lambda tid: next(t["name"] for t in TERMINALS if t["id"] == tid))
-        speed_knots = col4.slider("Speed (knots)", 14.0, 20.0, DEFAULT_SPEED_KNOTS, step=0.5)
+        laden_speed_knots = col4.slider("Speed, laden (knots)", 14.0, 20.0, DEFAULT_LADEN_SPEED_KNOTS, step=0.5,
+                                         help=f"Ballast (empty) speed is derived automatically: "
+                                              f"laden + {BALLAST_SPEED_BONUS_KNOTS} knots.")
 
         available_date = st.date_input("Available from", value=date(2025, 3, 1))
         submitted = st.form_submit_button("Add vessel")
@@ -40,7 +42,7 @@ def render_fleet():
         if submitted:
             terminal = next(t for t in TERMINALS if t["id"] == terminal_id)
             available_from_iso = datetime.combine(available_date, datetime.min.time()).isoformat(timespec="minutes")
-            new_vessel = add_vessel(vessel_class, capacity_m3, terminal, available_from_iso, speed_knots)
+            new_vessel = add_vessel(vessel_class, capacity_m3, terminal, available_from_iso, laden_speed_knots)
             st.success(f"Added **{new_vessel['id']}** ({vessel_class}, {capacity_m3:,} m³) "
                        f"at {terminal['name']}")
 
@@ -52,14 +54,15 @@ def render_fleet():
 
     for v in fleet:
         is_custom = v["id"] not in base_ids
-        cols = st.columns([2, 1.5, 1.5, 2.5, 2, 1])
+        cols = st.columns([2, 1.3, 1.3, 2, 1.6, 1.8, 1])
         cols[0].write(v["id"] + (" 🆕" if is_custom else ""))
         cols[1].write(v["vessel_class"])
         cols[2].write(f"{v['capacity_m3']:,} m³")
         cols[3].write(v["current_position"])
-        cols[4].write(v["available_from"])
+        cols[4].write(f"{v['laden_speed_knots']}/{v['ballast_speed_knots']}kt")
+        cols[5].write(v["available_from"])
         if is_custom:
-            if cols[5].button("Remove", key=f"remove_{v['id']}"):
+            if cols[6].button("Remove", key=f"remove_{v['id']}"):
                 remove_vessel(v["id"])
                 st.rerun()
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 from core.routing    import build_route
 from core.physics    import calculate_eta
-from ui.theme        import PAGE_BG, TEXT_MUTED, STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL
+from ui.theme        import PAGE_BG, TEXT_MUTED, BORDER, ACCENT, STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL
 
 
 def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
@@ -44,7 +44,7 @@ def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
         eta = calculate_eta(
             departure_date_iso=loading_end.isoformat(timespec="minutes"),
             distance_nm=route["distance_nm"],
-            speed_knots=vessel["speed_knots"],
+            speed_knots=vessel["laden_speed_knots"],
             weather_delay_hours=route["weather_delay_hours"],
             canal_delay_hours=route["canal_delay_hours"],
         )
@@ -90,7 +90,7 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
             y=[bar["vessel"]],
             base=[(bar["loading_start"] - datetime(2025, 3, 1)).total_seconds() / 86400],
             orientation="h",
-            marker=dict(color="#378ADD", opacity=0.75, line=dict(width=0)),
+            marker=dict(color=ACCENT, opacity=0.75, line=dict(width=0)),
             hovertemplate=(
                 f"<b>{bar['cargo']}</b><br>"
                 f"Loading: {bar['loading_start'].strftime('%b %d %H:%M')} → "
@@ -118,7 +118,7 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
     fig.update_layout(
         barmode="stack",
         bargap=0.55,
-        xaxis=dict(title="Days from March 1, 2025", range=[0, 45], gridcolor="#22242c"),
+        xaxis=dict(title="Days from March 1, 2025", range=[0, 45], gridcolor=BORDER),
         yaxis=dict(title=None),
         height=70 + 42 * len({bar["vessel"] for bar in bars}),
         margin=dict(l=10, r=10, t=10, b=40),
@@ -146,9 +146,9 @@ if __name__ == "__main__":
     from data.terminals  import TERMINALS
     from core.optimizer  import assign_cargoes
     from core.pnl        import enrich_assignments_with_pnl
-    from ui.theme        import inject_dark_theme
+    from ui.theme        import inject_theme
 
-    inject_dark_theme()
+    inject_theme()
     st.title("Gantt (standalone preview)")
     result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)

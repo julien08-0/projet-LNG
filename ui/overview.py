@@ -10,24 +10,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
+from config          import SPOT_HORIZON_DAYS
 from data.cargoes    import CARGOES
 from data.terminals  import TERMINALS
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
 from core.spot       import simulate_spot_market
 from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
+from ui.theme        import inject_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def render_overview():
-    inject_dark_theme()
+    inject_theme()
 
     st.title("LNG Scheduler & Asset Optimizer")
 
     vessels  = get_fleet()
     result   = assign_cargoes(CARGOES, vessels, TERMINALS)
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, vessels, TERMINALS)
-    spot     = simulate_spot_market(vessels, TERMINALS, CARGOES, enriched, n_days=46)
+    spot     = simulate_spot_market(vessels, TERMINALS, CARGOES, enriched, n_days=SPOT_HORIZON_DAYS)
 
     contract_margin = sum(a["margin"]["net_margin_usd"] for a in enriched if a["feasible"])
     spot_realized   = spot["summary"]["total_realized_margin_usd"]

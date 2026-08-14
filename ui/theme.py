@@ -1,26 +1,36 @@
 # ui/theme.py
-# Shared dark visual identity — colors and a CSS injection helper.
+# Shared light visual identity — colors and a CSS injection helper.
 # Every ui/*.py page uses these instead of page-local hex values.
 
-PAGE_BG      = "#0d0d0d"
-CHART_BG     = "#14151a"
-SURFACE      = "#1a1b21"
-SURFACE_ALT  = "#22242c"
-BORDER       = "#2c2c2a"
-TEXT_PRIMARY = "#e8e8ec"
-TEXT_MUTED   = "#8a8d99"
+PAGE_BG      = "#f9f9f7"
+CHART_BG     = "#fcfcfb"
+SURFACE      = "#fcfcfb"
+SURFACE_ALT  = "#f0efec"
+BORDER       = "#e1e0d9"
+TEXT_PRIMARY = "#0b0b0b"
+TEXT_MUTED   = "#898781"
+
+ACCENT = "#2a78d6"
 
 VESSEL_PALETTE = [
-    "#3987e5", "#19e0a0", "#f5b400", "#39e639",
-    "#a99bff", "#ff6b6b", "#ff6fb0", "#ff8a3d",
+    "#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+    "#e87ba4", "#008300", "#4a3aa7", "#e34948",
 ]
 
 STATUS_GOOD     = "#0ca30c"
 STATUS_WARNING  = "#fab219"
 STATUS_CRITICAL = "#d03b3b"
 
-TERMINAL_LOAD_COLOR      = "#7fd4ff"
-TERMINAL_DISCHARGE_COLOR = "#5ce6a6"
+TERMINAL_LOAD_COLOR      = "#2a78d6"
+TERMINAL_DISCHARGE_COLOR = "#1baf7a"
+
+# Map-specific geo colors (ui/map.py choropleth). Derived from the palette
+# above so land/ocean/coast stay coherent with the rest of the UI; ocean is
+# the one new tint (a pale wash of ACCENT) since nothing above covers it.
+MAP_LAND_COLOR    = SURFACE_ALT
+MAP_OCEAN_COLOR   = "#dce8f5"
+MAP_COAST_COLOR   = TEXT_MUTED
+MAP_COUNTRY_COLOR = BORDER
 
 
 def hero_metric(label, value, sublabel=None, accent=None):
@@ -56,31 +66,34 @@ def badge_html(text, color=None):
             f"padding:2px 9px;border-radius:9px;font-weight:600;white-space:nowrap;'>{text}</span>")
 
 
-def inject_dark_theme():
+def inject_theme():
     """Call once near the top of each render_*() page function.
 
     Covers the three surfaces Streamlit renders outside our own markup —
-    the app body, the top toolbar, and the sidebar — so there's no light
+    the app body, the top toolbar, and the sidebar — so there's no dark
     seam left over from the default theme. Uses Streamlit's stable
     data-testid hooks rather than generated class names.
     """
     import streamlit as st
     st.markdown(f"""
     <style>
-    .stApp {{ background-color: {PAGE_BG}; color: {TEXT_PRIMARY}; }}
+    .stApp {{
+        background-color: {PAGE_BG}; color: {TEXT_PRIMARY};
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }}
     header[data-testid="stHeader"] {{ background-color: {PAGE_BG}; }}
     section[data-testid="stSidebar"] {{ background-color: {SURFACE}; }}
     section[data-testid="stSidebar"] * {{ color: {TEXT_PRIMARY}; }}
 
     /* st.metric ships its own text color tuned for Streamlit's light theme —
-       it doesn't inherit .stApp's color, so on a forced-dark background it
-       renders as near-invisible dark grey without these overrides. */
+       it doesn't always inherit .stApp's color, so pin it explicitly to keep
+       values legible against the light background. */
     [data-testid="stMetricValue"] {{ color: {TEXT_PRIMARY} !important; }}
     [data-testid="stMetricLabel"] {{ color: {TEXT_MUTED} !important; }}
     [data-testid="stMetricDelta"] {{ color: inherit !important; }}
 
-    /* Expander header keeps a light chrome by default; match the rest of
-       the dark surfaces so it doesn't read as an unstyled foreign widget. */
+    /* Expander header keeps its own chrome by default; match the rest of
+       the light surfaces so it doesn't read as an unstyled foreign widget. */
     [data-testid="stExpander"] summary {{
         background-color: {SURFACE}; color: {TEXT_PRIMARY};
         border: 1px solid {BORDER}; border-radius: 8px;
@@ -88,6 +101,20 @@ def inject_dark_theme():
     [data-testid="stExpander"] summary:hover {{ color: {TEXT_PRIMARY}; }}
     [data-testid="stExpander"] div[data-testid="stExpanderDetails"] {{
         background-color: {PAGE_BG};
+    }}
+
+    /* Primary buttons: solid accent fill, distinct from any informational
+       text/labels elsewhere on the page. */
+    [data-testid="stButton"] button, [data-testid="stDownloadButton"] button {{
+        background-color: {ACCENT}; color: #ffffff; border: 1px solid {ACCENT};
+        border-radius: 8px; cursor: pointer; font-weight: 600;
+        transition: opacity 0.15s ease;
+    }}
+    [data-testid="stButton"] button:hover, [data-testid="stDownloadButton"] button:hover {{
+        background-color: {ACCENT}; color: #ffffff; opacity: 0.85;
+    }}
+    [data-testid="stButton"] button:focus, [data-testid="stDownloadButton"] button:focus {{
+        color: #ffffff;
     }}
     </style>
     """, unsafe_allow_html=True)

@@ -11,18 +11,19 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
+from config          import SPOT_HORIZON_DAYS
 from data.cargoes    import CARGOES
 from data.terminals  import TERMINALS
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
 from core.spot       import simulate_spot_market
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
+from ui.theme        import (inject_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
                               TEXT_PRIMARY, TEXT_MUTED, VESSEL_PALETTE, STATUS_GOOD, STATUS_CRITICAL)
 
 MARKER_COLOR = {"JKM": VESSEL_PALETTE[2], "TTF": VESSEL_PALETTE[0], "HH": VESSEL_PALETTE[3]}
 
-N_DAYS = 46   # same horizon as the Fleet Map's day slider
+N_DAYS = SPOT_HORIZON_DAYS   # same horizon as the Fleet Map's day slider — config.py, not a local guess
 
 
 def _price_chart(price_paths, n_days):
@@ -45,15 +46,24 @@ def _price_chart(price_paths, n_days):
 
 
 def _summary_rows(decisions):
-    """Compact blotter — the columns that answer 'did this trade work'."""
+    """Compact blotter — the columns that answer 'did this trade work'.
+    A voyage that hasn't arrived by the last simulated day (settled=False)
+    has no known outcome yet — showing a GAIN/LOSS for it would claim a
+    delivery that hasn't happened, same bug as a Fleet Map vessel drawn as
+    already discharged while still at sea."""
+    # "Margin (realized)" mixes real numbers (settled) with a "—" placeholder
+    # (pending) on purpose, pre-formatted to a string rather than left as a
+    # numeric NaN — a NumberColumn with a custom format renders a missing
+    # numeric value as the literal text "None" in this Streamlit version,
+    # which is worse than what it's meant to fix.
     return [{
         "Day":               d["dispatch_day"],
         "Vessel":            d["vessel_id"],
         "Route":             f"{d['load_terminal_id']} → {d['discharge_terminal_id']}",
         "Volume (mmBtu)":    d["volume_mmbtu"],
         "Margin (expected)": d["expected_margin_usd"],
-        "Margin (realized)": d["realized_margin_usd"],
-        "Outcome":           "GAIN" if d["outcome"] == "gain" else "LOSS",
+        "Margin (realized)": f"${d['realized_margin_usd']:,.0f}" if d["settled"] else "—",
+        "Outcome":           d["outcome"].upper() if d["settled"] else "PENDING",
     } for d in decisions]
 
 
@@ -67,16 +77,16 @@ def _detail_rows(decisions):
         "Volume (mmBtu)":        d["volume_mmbtu"],
         "Buy price":             d["buy_price_usd_mmbtu"],
         "Sell price (expected)": d["expected_sell_price_usd_mmbtu"],
-        "Sell price (realized)": d["realized_sell_price_usd_mmbtu"],
+        "Sell price (realized)": f"${d['realized_sell_price_usd_mmbtu']:.2f}" if d["settled"] else "—",
         "Margin (expected)":     d["expected_margin_usd"],
-        "Margin (realized)":     d["realized_margin_usd"],
-        "Outcome":               d["outcome"].upper(),
+        "Margin (realized)":     f"${d['realized_margin_usd']:,.0f}" if d["settled"] else "—",
+        "Outcome":               d["outcome"].upper() if d["settled"] else "PENDING",
         "Arrival day":           d["arrival_day"],
     } for d in decisions]
 
 
 def render_spot():
-    inject_dark_theme()
+    inject_theme()
     st.title("Spot Trading")
     st.caption(
         "Opportunistic buy/sell for vessels not committed to a fixed contract. "
@@ -101,9 +111,17 @@ def render_spot():
         accent=STATUS_GOOD if summary["total_realized_margin_usd"] >= 0 else STATUS_CRITICAL,
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     col1.metric("Voyages dispatched", summary["voyage_count"])
     col2.metric("Win / loss", f"{summary['wins']} / {summary['losses']}")
+    col3.metric("Still in transit (pending)", summary["pending_count"])
+
+    if summary["pending_count"] > 0:
+        st.caption(
+            f"{summary['pending_count']} voyage(s) dispatched too close to the end of the "
+            f"{N_DAYS}-day window to have arrived yet — expected margin shown, no realized "
+            f"outcome until settlement (see the Fleet Map to watch them still in transit)."
+        )
 
     if summary["losses"] > 0:
         st.warning(
@@ -131,7 +149,8 @@ def render_spot():
         hide_index=True,
         column_config={
             "Margin (expected)":  st.column_config.NumberColumn(format="$%,.0f"),
-            "Margin (realized)":  st.column_config.NumberColumn(format="$%,.0f"),
+            # Margin (realized) is pre-formatted (settled rows) or "—"
+            # (pending) in _summary_rows — plain text, no NumberColumn here.
             "Volume (mmBtu)":     st.column_config.NumberColumn(format="%,.0f"),
         },
     )
@@ -145,9 +164,9 @@ def render_spot():
             column_config={
                 "Buy price":             st.column_config.NumberColumn(format="$%.2f"),
                 "Sell price (expected)": st.column_config.NumberColumn(format="$%.2f"),
-                "Sell price (realized)": st.column_config.NumberColumn(format="$%.2f"),
+                # Sell price (realized) / Margin (realized): pre-formatted
+                # string ("—" when pending) in _detail_rows, not a NumberColumn.
                 "Margin (expected)":     st.column_config.NumberColumn(format="$%,.0f"),
-                "Margin (realized)":     st.column_config.NumberColumn(format="$%,.0f"),
                 "Volume (mmBtu)":        st.column_config.NumberColumn(format="%,.0f"),
             },
         )

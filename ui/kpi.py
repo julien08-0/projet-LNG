@@ -15,7 +15,7 @@ from core.pnl        import enrich_assignments_with_pnl
 from ui.alerts       import detect_alerts, render_alerts_section
 from ui.gantt        import render_gantt_chart
 from ui.fleet_state  import get_fleet
-from ui.theme        import inject_dark_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
+from ui.theme        import inject_theme, hero_metric, STATUS_GOOD, STATUS_CRITICAL
 
 
 def compute_kpis(enriched_assignments, cargoes, vessels):
@@ -55,7 +55,7 @@ def compute_kpis(enriched_assignments, cargoes, vessels):
 
 
 def render_kpi():
-    inject_dark_theme()
+    inject_theme()
     st.title("KPI Dashboard")
 
     VESSELS = get_fleet()

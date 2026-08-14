@@ -15,7 +15,7 @@ import streamlit as st
 
 from data.vessels import VESSELS
 from core.physics import calculate_heel_requirement
-from config import MAX_DRAFT_M, DEFAULT_SPEED_KNOTS
+from config import MAX_DRAFT_M, DEFAULT_LADEN_SPEED_KNOTS, BALLAST_SPEED_BONUS_KNOTS
 
 VALID_VESSEL_CLASSES = list(MAX_DRAFT_M.keys())
 
@@ -25,11 +25,14 @@ def get_fleet():
     return VESSELS + st.session_state.get("custom_vessels", [])
 
 
-def add_vessel(vessel_class, capacity_m3, terminal, available_from_iso, speed_knots=DEFAULT_SPEED_KNOTS):
+def add_vessel(vessel_class, capacity_m3, terminal, available_from_iso, laden_speed_knots=DEFAULT_LADEN_SPEED_KNOTS):
     """
     Add a vessel for the rest of this session (appended to
     st.session_state["custom_vessels"]). Starting position is the given
     terminal's coordinates — no raw lat/lon entry, always a valid position.
+    Ballast speed is derived (laden + the standard empty-vs-loaded bonus,
+    config.BALLAST_SPEED_BONUS_KNOTS) rather than asked for separately —
+    the Fleet Management form stays a one-speed control.
 
     Returns the new vessel dict.
     """
@@ -48,7 +51,8 @@ def add_vessel(vessel_class, capacity_m3, terminal, available_from_iso, speed_kn
         "current_lon":      terminal["lon"],
         "current_position": terminal["name"],
         "available_from":   available_from_iso,
-        "speed_knots":      speed_knots,
+        "laden_speed_knots":   laden_speed_knots,
+        "ballast_speed_knots": laden_speed_knots + BALLAST_SPEED_BONUS_KNOTS,
         "current_heel_m3":  required_heel,
         "status":           "available",
     }

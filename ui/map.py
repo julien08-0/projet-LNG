@@ -3,7 +3,7 @@
 # Uses dynamic routing — any terminal pair works automatically.
 # Dashed lines show real maritime routes with correct chokepoints.
 #
-# Dark theme: each vessel gets its own color (fixed categorical order,
+# Light theme: each vessel gets its own color (fixed categorical order,
 # cycled if the fleet is larger than the palette), its ship glyph glows
 # via a soft halo marker, and its route is dashed in the same color — so a
 # vessel is traceable by color alone across the map and the side panel.
@@ -26,13 +26,15 @@ from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl
 from core.spot       import simulate_spot_market
 from core.routing    import build_route
-from core.physics    import calculate_boiloff
-from config          import BOILOFF_RATE
+from core.physics    import calculate_boiloff, calculate_heel_remaining
+from config          import BOILOFF_RATE, SPOT_HORIZON_DAYS
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, badge_html, PAGE_BG, CHART_BG, VESSEL_PALETTE,
-                              TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR)
+from ui.theme        import (inject_theme, badge_html, PAGE_BG, CHART_BG, VESSEL_PALETTE,
+                              TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR,
+                              TEXT_MUTED, BORDER, MAP_LAND_COLOR, MAP_OCEAN_COLOR,
+                              MAP_COAST_COLOR, MAP_COUNTRY_COLOR)
 
-SPOT_HORIZON_DAYS = 46   # matches the map's own Day 0-45 slider range
+LAST_DAY = SPOT_HORIZON_DAYS - 1   # slider is 0-indexed (Day 0 = sim start)
 
 
 # ---------------------------------------------------------------------------
@@ -40,12 +42,12 @@ SPOT_HORIZON_DAYS = 46   # matches the map's own Day 0-45 slider range
 # ui/theme.py and are imported above)
 # ---------------------------------------------------------------------------
 
-LAND_COLOR   = "#1c1d22"
-OCEAN_COLOR  = "#0a1220"
-COAST_COLOR  = "#2c2f3a"
-COUNTRY_COLOR = "#22242c"
-MUTED_INK    = "#8a8d99"
-TRACK_COLOR  = "#2c2c2a"   # unfilled portion of a fill bar
+LAND_COLOR    = MAP_LAND_COLOR
+OCEAN_COLOR   = MAP_OCEAN_COLOR
+COAST_COLOR   = MAP_COAST_COLOR
+COUNTRY_COLOR = MAP_COUNTRY_COLOR
+MUTED_INK     = TEXT_MUTED
+TRACK_COLOR   = BORDER   # unfilled portion of a fill bar
 
 SHIP_GLYPH = "⛴"
 
@@ -97,19 +99,38 @@ def get_vessel_state(vessel, cargo, route, day, sim_start, discharge_terminal_id
     """Compute vessel position, phase, and cargo fill on simulation day."""
     laycan_start    = datetime.fromisoformat(cargo["laycan_start"])
     loading_end     = laycan_start + timedelta(hours=24)
-    transit_days    = route["distance_nm"] / vessel["speed_knots"] / 24.0
+    transit_days    = route["distance_nm"] / vessel["laden_speed_knots"] / 24.0
     discharge_start = loading_end + timedelta(days=transit_days)
     discharge_end   = discharge_start + timedelta(hours=24)
     current         = sim_start + timedelta(days=day)
 
     # Heel — minimum LNG always retained on board (keeps tanks cryogenic,
-    # fuels boil-off during ballast). Never simulated to zero.
-    heel_fraction = vessel["current_heel_m3"] / vessel["capacity_m3"]
+    # fuels boil-off during ballast). Erodes during the empty/ballast leg
+    # via the same boil-off physics as cargo (same LNG, same tanks) —
+    # never simulated to zero, but not held artificially flat either.
+    # The eroded level at the end of ballast becomes the floor for every
+    # later phase (loading through completed): heel isn't re-topped up
+    # mid-voyage, and it isn't spent further once cargo is aboard (its
+    # job — keeping the empty tanks cold — is done once loading starts).
+    # ballast_days on the cargo dict (set by _voyage_cargo/_spot_rows) is
+    # THIS voyage's own ballast length — required for a vessel's 2nd+ spot
+    # voyage, where "time since sim_start" would wrongly include all the
+    # days spent on an earlier job. Falls back to time-since-sim_start
+    # only when absent (real contract cargoes, and a vessel's very first
+    # job, where that IS the correct ballast length).
+    ballast_days_total = cargo.get("ballast_days")
+    if ballast_days_total is None:
+        ballast_days_total = max(0.0, (laycan_start - sim_start).total_seconds() / 86400.0)
+    heel_at_loading_m3 = calculate_heel_remaining(
+        vessel["current_heel_m3"], vessel["vessel_class"], ballast_days_total, ambient_temp_celsius=28.0)
+    heel_fraction = heel_at_loading_m3 / vessel["capacity_m3"]
 
     if current < laycan_start:
-        # Ballast leg — no commercial cargo, but heel is maintained.
-        commercial_fraction = 0.0
-        fill = heel_fraction + commercial_fraction * (1.0 - heel_fraction)
+        # Ballast leg — no commercial cargo, heel erodes progressively.
+        ballast_days_elapsed = max(0.0, (current - sim_start).total_seconds() / 86400.0)
+        remaining_heel_m3 = calculate_heel_remaining(
+            vessel["current_heel_m3"], vessel["vessel_class"], ballast_days_elapsed, ambient_temp_celsius=28.0)
+        fill = remaining_heel_m3 / vessel["capacity_m3"]
         return {"lat": vessel["current_lat"], "lon": vessel["current_lon"],
                 "phase": "waiting", "fill": round(fill, 3), "volume": 0}
 
@@ -175,6 +196,7 @@ def _vessel_voyages(vessel_id, contract_entry, cargoes_by_id, spot_decisions_by_
             "kind": "contract",
             "label": contract_entry["cargo_id"],
             "start_day": start_day,
+            "ballast_days": start_day,   # a contract is always job[0]: ballast runs from sim_start
             "loading_terminal_id": cargo["loading_terminal"],
             "discharge_terminal_id": contract_entry["discharge_terminal"],
             "volume_mmbtu": cargo["volume_mmbtu"],
@@ -191,6 +213,7 @@ def _vessel_voyages(vessel_id, contract_entry, cargoes_by_id, spot_decisions_by_
             "kind": "spot",
             "label": f"Spot · Day {d['dispatch_day']}",
             "start_day": loading_start_day,
+            "ballast_days": d["ballast_days"],   # this voyage's own ballast, not elapsed sim time
             "loading_terminal_id": d["load_terminal_id"],
             "discharge_terminal_id": d["discharge_terminal_id"],
             "volume_mmbtu": d["volume_mmbtu"],
@@ -214,11 +237,15 @@ def _current_voyage(jobs, day):
 
 def _voyage_cargo(job):
     """The minimal cargo shape get_vessel_state() needs — real for a
-    contract, synthetic for a spot voyage."""
+    contract, synthetic for a spot voyage. ballast_days is this specific
+    voyage's own ballast length (see get_vessel_state) — required, not
+    derived from elapsed simulation time, so a vessel's 2nd+ spot voyage
+    doesn't get charged ballast erosion for time spent on an earlier job."""
     return {
         "laycan_start":     job["loading_start_iso"],
         "loading_terminal": job["loading_terminal_id"],
         "volume_mmbtu":     job["volume_mmbtu"],
+        "ballast_days":     job.get("ballast_days"),
     }
 
 
@@ -364,7 +391,7 @@ def _job_why_text(job):
 def _render_vessel_card(vessel, color, state, job):
     bog_rate_pct = BOILOFF_RATE[vessel["vessel_class"]] * 100
     fill_pct = max(0.0, min(100.0, state["fill"] * 100))
-    kind_badge = badge_html(job["label"], "#a99bff" if job["kind"] == "spot" else "#7fd4ff")
+    kind_badge = badge_html(job["label"], VESSEL_PALETTE[6] if job["kind"] == "spot" else TERMINAL_LOAD_COLOR)
 
     st.markdown(
         f"<div style='font-weight:600;color:{color};font-size:0.95rem;'>{vessel['id']}</div>"
@@ -489,6 +516,7 @@ def _spot_rows(day, spot_decisions, vessels, terminals, sim_start):
                 "volume_mmbtu":          d["volume_mmbtu"],
                 "loading_start_iso": (sim_start + timedelta(
                     days=d["dispatch_day"] + d["ballast_days"])).isoformat(timespec="minutes"),
+                "ballast_days": d["ballast_days"],
             }
             route = build_route(terminals_by_id[d["load_terminal_id"]], terminals_by_id[d["discharge_terminal_id"]])
             state = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, d["discharge_terminal_id"])
@@ -500,7 +528,10 @@ def _spot_rows(day, spot_decisions, vessels, terminals, sim_start):
             "Route": f"{d['load_terminal_id']} → {d['discharge_terminal_id']}",
             "Status": status,
             "Margin (expected) ($)": d["expected_margin_usd"],
-            "Margin (realized) ($)": d["realized_margin_usd"] if settled else None,
+            # Pre-formatted string ("—" when not yet settled), not a NumberColumn
+            # NaN — a NumberColumn with a custom format renders a missing
+            # numeric value as the literal text "None" in this Streamlit version.
+            "Margin (realized) ($)": f"${d['realized_margin_usd']:,.0f}" if settled else "—",
             "Outcome": d["outcome"].upper() if settled else "Pending",
         })
 
@@ -525,7 +556,8 @@ def _render_spot_panel(day, spot_sim, vessels, terminals):
         hide_index=True,
         column_config={
             "Margin (expected) ($)": st.column_config.NumberColumn(format="$%,.0f"),
-            "Margin (realized) ($)": st.column_config.NumberColumn(format="$%,.0f"),
+            # Margin (realized) ($) is pre-formatted above ("—" when
+            # pending) — plain text, no NumberColumn here.
         },
     )
 
@@ -535,7 +567,7 @@ def _render_spot_panel(day, spot_sim, vessels, terminals):
 # ---------------------------------------------------------------------------
 
 def render_map():
-    inject_dark_theme()
+    inject_theme()
     st.title("Fleet Map — Animation")
 
     VESSELS = get_fleet()
@@ -554,9 +586,9 @@ def render_map():
     # happen up here, not in the end-of-function auto-advance block.
     if st.session_state.fleet_playing:
         current  = st.session_state.get("fleet_day_slider", 0)
-        next_day = min(current + 1, 45)
+        next_day = min(current + 1, LAST_DAY)
         st.session_state.fleet_day_slider = next_day
-        if next_day >= 45:
+        if next_day >= LAST_DAY:
             st.session_state.fleet_playing = False
 
     col_play, col_pause = st.sidebar.columns(2)
@@ -565,7 +597,7 @@ def render_map():
     if col_pause.button("⏸ Pause", use_container_width=True):
         st.session_state.fleet_playing = False
 
-    day = st.sidebar.slider("Day", 0, 45, key="fleet_day_slider")
+    day = st.sidebar.slider("Day", 0, LAST_DAY, key="fleet_day_slider")
 
     filter_class = st.sidebar.multiselect(
         "Vessel class",

@@ -20,7 +20,7 @@ from train_ops.config               import LNG_DENSITY_KG_PER_M3, DAYS_PER_YEAR
 from train_ops.core.forecast        import run_fleet_forecast, calculate_availability
 from train_ops.core.cargo_generator import generate_fleet_cargoes
 from config                         import LNG_ENERGY_DENSITY_MMBTU_PER_M3
-from ui.theme import (inject_dark_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
+from ui.theme import (inject_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
                        TEXT_PRIMARY, TEXT_MUTED, VESSEL_PALETTE, STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL)
 
 
@@ -61,7 +61,7 @@ def _cargo_rows(cargoes):
 
 
 def render_train():
-    inject_dark_theme()
+    inject_theme()
     st.title("Train Performance")
     st.caption(
         "Upstream side of the chain: how much LNG a liquefaction train actually produces "
@@ -99,8 +99,11 @@ def render_train():
     col1.metric("Trains modeled", len(TRAINS))
     col2.metric("Availability (fleet avg)", f"{avg_availability*100:.1f}%")
     col3.metric("Downtime days (maint. + unplanned)", downtime_days)
-    col4.metric("Price used for load-factor decision", f"${fleet['price_usd_mmbtu']}/mmBtu")
-    st.caption(f"Price source: {fleet['price_source']}")
+    col4.metric("Price anchor (day 0)", f"${fleet['price_usd_mmbtu']}/mmBtu")
+    st.caption(
+        f"Price source: {fleet['price_source']} — the load-factor decision and planned-maintenance "
+        f"timing below use a day-by-day price that mean-reverts around this anchor, not a flat value."
+    )
 
     st.divider()
     st.subheader("Daily production")
@@ -127,10 +130,11 @@ def render_train():
                 f"⚠ Unplanned trip — day {d['day']} ({d['date']}), {repair_detail}</div>",
                 unsafe_allow_html=True,
             )
-        for window in train["maintenance_windows"]:
+        for window in fleet["resolved_maintenance_by_train"][train["id"]]:
             st.markdown(
                 f"<div style='font-size:0.8rem;color:{TEXT_MUTED};margin:2px 0 2px 8px;'>"
-                f"🔧 Planned — day {window['start_day']}, {window['duration_days']}d, {window['label']}</div>",
+                f"🔧 Planned — day {window['start_day']}, {window['duration_days']}d, {window['label']} "
+                f"(price/output-optimized — lost value ≈ ${window['lost_value_usd']/1e6:,.1f}M)</div>",
                 unsafe_allow_html=True,
             )
 

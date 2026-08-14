@@ -16,7 +16,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from core.physics    import calculate_eta
-from core.routing    import haversine_nm
+from core.routing    import build_route
 from core.constraints import check_draft_compatibility, check_laycan_compliance, check_slot_overlap
 
 
@@ -50,15 +50,18 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
             })
 
         # 2. Laycan compliance
-        # Calculate real ETA: from current vessel position to loading terminal
-        dist_to_load = haversine_nm(
-            vessel["current_lat"], vessel["current_lon"],
-            loading_terminal["lat"], loading_terminal["lon"],
-        )
+        # Real routed ETA (not straight-line) from current vessel position
+        # to loading terminal, ballast speed since no cargo is aboard yet —
+        # same method core.optimizer's reachability check uses, so an
+        # alert here can never contradict what the scheduler itself decided.
+        vessel_position = {"id": "VESSEL_POSITION", "lat": vessel["current_lat"], "lon": vessel["current_lon"]}
+        route_to_load = build_route(vessel_position, loading_terminal)
         eta_to_load = calculate_eta(
             departure_date_iso=vessel["available_from"],
-            distance_nm=max(dist_to_load, 1.0),  # avoid 0nm edge case
-            speed_knots=vessel["speed_knots"],
+            distance_nm=max(route_to_load["distance_nm"], 1.0),  # avoid 0nm edge case
+            speed_knots=vessel["ballast_speed_knots"],
+            weather_delay_hours=route_to_load["weather_delay_hours"],
+            canal_delay_hours=route_to_load["canal_delay_hours"],
         )
         laycan = check_laycan_compliance(
             eta_iso=eta_to_load["eta_iso"],
@@ -159,9 +162,9 @@ if __name__ == "__main__":
     from data.terminals import TERMINALS
     from data.cargoes   import CARGOES
     from core.optimizer import assign_cargoes
-    from ui.theme       import inject_dark_theme
+    from ui.theme       import inject_theme
 
-    inject_dark_theme()
+    inject_theme()
     st.title("Alerts (standalone preview)")
     result = assign_cargoes(CARGOES, VESSELS, TERMINALS)
     alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)

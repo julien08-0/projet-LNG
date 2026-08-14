@@ -18,8 +18,9 @@ from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl, format_decision_text
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_dark_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
-                              TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING)
+from ui.theme        import (inject_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
+                              TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING,
+                              VESSEL_PALETTE, TERMINAL_LOAD_COLOR)
 
 
 def candidates_to_dataframe(candidates):
@@ -67,7 +68,7 @@ def _margin_chart(feasible_sorted):
 
 def _detail_row(cargo, a):
     flexible = cargo["discharge_terminal"] is None
-    type_color = "#a99bff" if flexible else "#7fd4ff"
+    type_color = VESSEL_PALETTE[6] if flexible else TERMINAL_LOAD_COLOR
     type_label = "DES" if flexible else "FOB"
 
     st.markdown(
@@ -85,7 +86,7 @@ def _detail_row(cargo, a):
 
 
 def render_pnl():
-    inject_dark_theme()
+    inject_theme()
     st.title("P&L — Destination Decisions")
     st.caption("DES cargoes: destination chosen to maximize net margin. FOB cargoes: fixed destination.")
 
