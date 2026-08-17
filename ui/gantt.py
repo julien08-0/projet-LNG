@@ -4,9 +4,10 @@
 #
 # Doesn't carry enough on its own to justify a standalone nav page — it's
 # the same fleet/contracts as the Fleet Map, just viewed on a time axis
-# instead of a geographic one. Embedded there (in an expander) via
-# render_gantt_chart(), which takes the assignments already computed by
-# the caller so it reflects the same disruption scenario, not a fresh one.
+# instead of a geographic one. Embedded directly (no expander) on the
+# "P&L & KPIs" page via render_gantt_chart(), which takes the assignments
+# already computed by the caller so it reflects the same disruption
+# scenario, not a fresh one.
 
 import sys
 import os
@@ -18,6 +19,7 @@ from datetime import datetime, timedelta
 
 from core.routing    import build_route
 from core.physics    import calculate_eta
+from config          import SPOT_HORIZON_DAYS
 from ui.theme        import PAGE_BG, TEXT_MUTED, BORDER, ACCENT, STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL
 
 
@@ -77,8 +79,8 @@ def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
 
 def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
     """Draws the Gantt figure + legend + unassigned list. No title/theme
-    injection — meant to be embedded inside another page's layout (e.g.
-    inside an expander on the Fleet Map)."""
+    injection — meant to be embedded inside another page's layout (the
+    "P&L & KPIs" page)."""
     bars = build_gantt_data(enriched, cargoes, vessels, terminals)
 
     fig = go.Figure()
@@ -118,7 +120,7 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
     fig.update_layout(
         barmode="stack",
         bargap=0.55,
-        xaxis=dict(title="Days from March 1, 2025", range=[0, 45], gridcolor=BORDER),
+        xaxis=dict(title="Days from March 1, 2025", range=[0, SPOT_HORIZON_DAYS], gridcolor=BORDER),
         yaxis=dict(title=None),
         height=70 + 42 * len({bar["vessel"] for bar in bars}),
         margin=dict(l=10, r=10, t=10, b=40),

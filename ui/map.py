@@ -32,7 +32,8 @@ from ui.fleet_state  import get_fleet
 from ui.theme        import (inject_theme, badge_html, PAGE_BG, CHART_BG, VESSEL_PALETTE,
                               TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR,
                               TEXT_MUTED, BORDER, MAP_LAND_COLOR, MAP_OCEAN_COLOR,
-                              MAP_COAST_COLOR, MAP_COUNTRY_COLOR)
+                              MAP_COAST_COLOR, MAP_COUNTRY_COLOR,
+                              hero_metric, STATUS_GOOD, STATUS_CRITICAL)
 
 LAST_DAY = SPOT_HORIZON_DAYS - 1   # slider is 0-indexed (Day 0 = sim start)
 
@@ -568,9 +569,29 @@ def _render_spot_panel(day, spot_sim, vessels, terminals):
 
 def render_map():
     inject_theme()
-    st.title("Fleet Map — Animation")
 
     VESSELS = get_fleet()
+    closed = set()
+    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
+    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
+    spot_sim = simulate_spot_market(VESSELS, TERMINALS, CARGOES, enriched, n_days=SPOT_HORIZON_DAYS)
+
+    st.title("LNG Scheduler & Asset Optimizer")
+    st.caption("Real-time fleet scheduling, routing, and destination optimization for LNG carriers.")
+
+    contract_margin = sum(a["margin"]["net_margin_usd"] for a in enriched if a["feasible"])
+    spot_realized   = spot_sim["summary"]["total_realized_margin_usd"]
+    total_pnl       = contract_margin + spot_realized
+
+    hero_metric(
+        "Total net P&L",
+        f"${total_pnl/1e6:,.1f}M",
+        sublabel=f"Contracts ${contract_margin/1e6:,.1f}M + Spot (realized) ${spot_realized/1e6:,.1f}M",
+        accent=STATUS_GOOD if total_pnl >= 0 else STATUS_CRITICAL,
+    )
+
+    st.divider()
+    st.subheader("Fleet Map — Animation")
 
     # Sidebar controls
     st.sidebar.subheader("Simulation")
@@ -604,12 +625,6 @@ def render_map():
         ["Q-Max", "Q-Flex", "TFDE", "STEAM"],
         default=["Q-Max", "Q-Flex", "TFDE", "STEAM"],
     )
-
-    closed = set()
-
-    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
-    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
-    spot_sim = simulate_spot_market(VESSELS, TERMINALS, CARGOES, enriched, n_days=SPOT_HORIZON_DAYS)
 
     sim_start          = datetime(2025, 3, 1)
     cargoes_by_id      = {c["id"]: c for c in CARGOES}

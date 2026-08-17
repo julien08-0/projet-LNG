@@ -1,5 +1,7 @@
 # ui/pnl.py
-# P&L page: economic destination decisions per cargo.
+# P&L & KPIs page: economic destination decisions per cargo, schedule, and
+# global fleet performance metrics — all built from the same assignments so
+# every figure on the page agrees with every other.
 # The bar chart carries the hierarchy (which cargo makes the most money,
 # at a glance, by bar length) — the rows below are detail, not a second
 # attempt at the same comparison.
@@ -17,10 +19,48 @@ from data.terminals  import TERMINALS
 from data.cargoes    import CARGOES
 from core.optimizer  import assign_cargoes
 from core.pnl        import enrich_assignments_with_pnl, format_decision_text
+from ui.alerts       import detect_alerts, render_alerts_section
+from ui.gantt        import render_gantt_chart
 from ui.fleet_state  import get_fleet
 from ui.theme        import (inject_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
                               TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING,
                               VESSEL_PALETTE, TERMINAL_LOAD_COLOR)
+
+
+def compute_kpis(enriched_assignments, cargoes, vessels):
+    """
+    Aggregate fleet-level KPIs from assignments already enriched with P&L
+    (core/pnl.py) — BOG/margin figures are reused as-is, not recomputed,
+    so this page always agrees with the P&L page for the same fleet.
+    """
+    assigned_vessel_ids = {a["vessel_id"] for a in enriched_assignments}
+    feasible             = [a for a in enriched_assignments if a["feasible"]]
+    feasible_cargo_ids   = {a["cargo_id"] for a in feasible}
+
+    total_volume      = sum(c["volume_mmbtu"] for c in cargoes if c["id"] in feasible_cargo_ids)
+
+    total_bog_mmbtu   = sum(a["margin"]["gross_bog_mmbtu"]   for a in feasible)
+    total_bog_usd     = sum(a["margin"]["bog_cost_usd"]      for a in feasible)
+    total_bunker_usd  = sum(a["margin"]["bunker_saving_usd"] for a in feasible)
+    total_net_margin  = sum(a["margin"]["net_margin_usd"]    for a in feasible)
+
+    return {
+        # Two different denominators on purpose: a vessel is "deployed" once
+        # it's working a cargo; a cargo is "covered" once a vessel is working
+        # it. With more cargoes than vessels, 100% vessel deployment can
+        # still leave a cargo uncovered — that's not a contradiction, see
+        # the caption in render_pnl().
+        "vessels_deployed":        len(assigned_vessel_ids),
+        "vessels_total":           len(vessels),
+        "cargoes_covered":         len(feasible_cargo_ids),
+        "cargoes_total":           len(cargoes),
+        "total_volume_mmbtu":      round(total_volume, 0),
+        "total_bog_mmbtu":         round(total_bog_mmbtu, 0),
+        "total_bog_usd":           round(total_bog_usd, 0),
+        "total_bunker_saving_usd": round(total_bunker_usd, 0),
+        "total_net_margin_usd":    round(total_net_margin, 0),
+        "unassigned_count":        len(cargoes) - len(feasible_cargo_ids),
+    }
 
 
 def candidates_to_dataframe(candidates):
@@ -87,8 +127,8 @@ def _detail_row(cargo, a):
 
 def render_pnl():
     inject_theme()
-    st.title("P&L — Destination Decisions")
-    st.caption("DES cargoes: destination chosen to maximize net margin. FOB cargoes: fixed destination.")
+    st.title("P&L & KPIs")
+    st.caption("Destination decisions, schedule, and fleet performance.")
 
     VESSELS = get_fleet()
     result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
@@ -104,6 +144,10 @@ def render_pnl():
 
     feasible_sorted = sorted(feasible, key=lambda a: a["margin"]["net_margin_usd"], reverse=True)
     st.plotly_chart(_margin_chart(feasible_sorted), use_container_width=True)
+
+    st.divider()
+    st.subheader("Schedule (Gantt)")
+    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])
 
     st.divider()
     st.subheader("Detail")
@@ -131,6 +175,42 @@ def render_pnl():
                 f"{badge_html(u['cargo_id'], color)} <span style='color:{TEXT_MUTED};'>{u['reason']}</span></div>",
                 unsafe_allow_html=True,
             )
+
+    st.divider()
+
+    kpis = compute_kpis(enriched, CARGOES, VESSELS)
+
+    st.subheader("Fleet")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Vessels deployed", f"{kpis['vessels_deployed']} / {kpis['vessels_total']}")
+    col2.metric("Cargoes covered",  f"{kpis['cargoes_covered']} / {kpis['cargoes_total']}")
+    col3.metric("Unassigned cargoes", kpis["unassigned_count"])
+    if kpis["vessels_deployed"] == kpis["vessels_total"] and kpis["unassigned_count"] > 0:
+        st.caption(
+            "Every vessel is deployed (100% of the fleet) and a cargo is still "
+            "unassigned — not a contradiction: there are more cargoes than "
+            "vessels this month, so full fleet deployment is the ceiling, not "
+            "full cargo coverage. See the alert below for which one and why."
+        )
+
+    st.divider()
+
+    st.subheader("Volumes")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total volume contracted", f"{kpis['total_volume_mmbtu']:,.0f} mmBtu")
+    col2.metric("Total BOG loss",          f"{kpis['total_bog_mmbtu']:,.0f} mmBtu")
+    col3.metric("BOG value lost",          f"${kpis['total_bog_usd']:,.0f}")
+
+    st.divider()
+
+    st.subheader("Costs")
+    col1, col2 = st.columns(2)
+    col1.metric("Bunker saving (BOG as fuel)", f"${kpis['total_bunker_saving_usd']:,.0f}")
+    col2.metric("Net BOG cost", f"${kpis['total_bog_usd'] - kpis['total_bunker_saving_usd']:,.0f}")
+
+    st.divider()
+    alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)
+    render_alerts_section(alerts)
 
 
 if __name__ == "__main__":

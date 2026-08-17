@@ -3,7 +3,7 @@
 # Severity: CRITICAL (red), WARNING (orange), INFO (blue).
 #
 # Doesn't carry enough on its own to justify a standalone nav page — it's
-# a diagnostic on the same assignments the KPI Dashboard already computes.
+# a diagnostic on the same assignments the "P&L & KPIs" page already computes.
 # Embedded there (bottom of the page) via render_alerts_section(), which
 # takes the alert list already detected by the caller.
 
@@ -126,7 +126,7 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
 
 
 def render_alerts_section(alerts):
-    """Compact alerts block — embedded at the bottom of the KPI Dashboard,
+    """Compact alerts block — embedded at the bottom of the "P&L & KPIs" page,
     not a standalone page. No title/hero: the parent page already has one."""
     critical = [a for a in alerts if a["severity"] == "CRITICAL"]
     warnings = [a for a in alerts if a["severity"] == "WARNING"]
