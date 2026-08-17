@@ -1,5 +1,5 @@
 # ui/disruption.py
-# Disruption simulator: vessel delay / terminal offline / chokepoint closure.
+# Disruption simulator: vessel delay / terminal offline.
 # Shows the fleet-wide $ impact (baseline vs scenario). No business logic
 # lives here — everything comes from core.disruption.simulate_disruption_impact.
 
@@ -77,8 +77,7 @@ def render_disruption():
 
     VESSELS = get_fleet()
 
-    tab_vessel, tab_terminal, tab_chokepoint = st.tabs(
-        ["Vessel delay", "Terminal offline", "Chokepoint closure"])
+    tab_vessel, tab_terminal = st.tabs(["Vessel delay", "Terminal offline"])
 
     with tab_vessel:
         vessel_id = st.selectbox("Vessel", [v["id"] for v in VESSELS], key="disr_vessel")
@@ -109,21 +108,6 @@ def render_disruption():
                      f"{', '.join(d['cargo_id'] for d in transform['destination_removed'])}")
 
         impact = simulate_disruption_impact(CARGOES, VESSELS, TERMINALS, scenario_cargoes=transform["cargoes"])
-        _render_impact_summary(impact)
-        _render_cargo_diff_table(impact)
-
-    with tab_chokepoint:
-        closed = set()
-        if st.checkbox("🔴 Close Suez Canal", key="disr_suez"):
-            closed.add("SUEZ")
-        if st.checkbox("🔴 Close Strait of Hormuz", key="disr_hormuz"):
-            closed.add("HORMUZ")
-        if st.checkbox("🔴 Close Strait of Malacca", key="disr_malacca"):
-            closed.add("MALACCA")
-        if st.checkbox("🔴 Close Panama Canal", key="disr_panama"):
-            closed.add("PANAMA")
-
-        impact = simulate_disruption_impact(CARGOES, VESSELS, TERMINALS, scenario_closed_chokepoints=closed)
         _render_impact_summary(impact)
         _render_cargo_diff_table(impact)
 

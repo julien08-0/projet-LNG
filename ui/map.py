@@ -605,16 +605,7 @@ def render_map():
         default=["Q-Max", "Q-Flex", "TFDE", "STEAM"],
     )
 
-    st.sidebar.subheader("Disruptions")
     closed = set()
-    if st.sidebar.checkbox("🔴 Close Suez Canal"):
-        closed.add("SUEZ")
-    if st.sidebar.checkbox("🔴 Close Strait of Hormuz"):
-        closed.add("HORMUZ")
-    if st.sidebar.checkbox("🔴 Close Strait of Malacca"):
-        closed.add("MALACCA")
-    if st.sidebar.checkbox("🔴 Close Panama Canal"):
-        closed.add("PANAMA")
 
     result   = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
@@ -685,16 +676,6 @@ def render_map():
             route     = routes_cache[route_key]
             state     = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, job["discharge_terminal_id"])
             _render_vessel_card(vessel, vessel_colors[vessel["id"]], state, job)
-
-    # Disruption impact
-    if closed:
-        st.warning(f"Closed chokepoints: {', '.join(closed)}")
-        for u in result["unassigned"]:
-            st.error(f"{u['cargo_id']} unassigned — {u['reason']}")
-        for e in enriched:
-            if not e["feasible"]:
-                st.error(f"{e['cargo_id']} assigned to {e['vessel_id']} but no feasible "
-                         f"destination given closed chokepoints")
 
     _render_contracts_panel(day, enriched, result["unassigned"], VESSELS, CARGOES, TERMINALS, closed)
     _render_spot_panel(day, spot_sim, VESSELS, TERMINALS)
