@@ -28,8 +28,12 @@ TRAINS = [
         "min_load_factor":    MIN_LOAD_FACTOR,
         "max_load_factor":    MAX_LOAD_FACTOR,
         "breakeven_usd_mmbtu": DEFAULT_BREAKEVEN_USD_MMBTU,
+        # No start_day here on purpose — the planned-turnaround date is
+        # picked per forecast run by core.performance.resolve_maintenance_windows,
+        # for the cheapest/lowest-output stretch of that run's horizon,
+        # instead of being pinned to an arbitrary fixed day.
         "maintenance_windows": [
-            {"start_day": 45, "duration_days": 6, "label": "Planned turnaround"},
+            {"duration_days": 6, "label": "Planned turnaround"},
         ],
     },
 ]
@@ -46,6 +50,7 @@ if __name__ == "__main__":
         print(f"  [{t['id']:<16}] {t['name']:<20} @ {t['terminal_id']:<12} "
               f"{t['capacity_mtpa']} MTPA  breakeven=${t['breakeven_usd_mmbtu']}/mmBtu")
         for m in t["maintenance_windows"]:
-            print(f"      maintenance: day {m['start_day']} for {m['duration_days']}d — {m['label']}")
+            print(f"      maintenance: {m['duration_days']}d — {m['label']} "
+                  f"(start day resolved per forecast run, not fixed here)")
 
     print("\nOK")

@@ -70,6 +70,29 @@ UNPLANNED_REPAIR_MAX_DAYS        = 5
 RELIABILITY_SEED                 = 7
 
 # ---------------------------------------------------------------------------
+# Train-side price path — mean-reverting daily TTF-linked price, used both
+# to drive the day-by-day load-factor decision and to pick the planned
+# maintenance date (see below). Deliberately its own generator, not
+# core.spot's: train_ops stays a self-contained package (see module
+# docstring) — the two sides only need to agree that prices mean-revert,
+# not share a seed or implementation.
+# ---------------------------------------------------------------------------
+
+TRAIN_PRICE_DAILY_VOLATILITY     = 0.030   # same order of magnitude as the trading side's TTF volatility
+TRAIN_PRICE_MEAN_REVERSION_SPEED = 0.03    # ~3% of the gap to anchor closes daily
+TRAIN_PRICE_SEED                 = 5
+
+# ---------------------------------------------------------------------------
+# Maintenance scheduling — the planned-turnaround date isn't a fixed
+# calendar entry; it's picked to minimize the value of production given up
+# (nameplate x load-factor x derating x price, summed over the window),
+# i.e. the cheapest, lowest-output stretch of the horizon. Bounded away
+# from day 0 so a forecast doesn't open with the train already mid-turnaround.
+# ---------------------------------------------------------------------------
+
+MAINTENANCE_EARLIEST_START_DAY = 7
+
+# ---------------------------------------------------------------------------
 # Cargo generation — how continuous production becomes discrete cargoes
 # the existing scheduler (core.optimizer.assign_cargoes) can consume.
 # ---------------------------------------------------------------------------
@@ -120,6 +143,14 @@ if __name__ == "__main__":
     print(f"  Unplanned trip probability : {UNPLANNED_TRIP_DAILY_PROBABILITY*100:.1f}%/day while operating")
     print(f"  Repair duration             : {UNPLANNED_REPAIR_MIN_DAYS}-{UNPLANNED_REPAIR_MAX_DAYS} days")
     print(f"  Seed                        : {RELIABILITY_SEED}")
+
+    print("\n-- Train-side price path --")
+    print(f"  Daily volatility      : {TRAIN_PRICE_DAILY_VOLATILITY*100:.1f}%")
+    print(f"  Mean reversion speed  : {TRAIN_PRICE_MEAN_REVERSION_SPEED*100:.0f}%/day")
+    print(f"  Seed                  : {TRAIN_PRICE_SEED}")
+
+    print("\n-- Maintenance scheduling --")
+    print(f"  Earliest start day : {MAINTENANCE_EARLIEST_START_DAY}")
 
     print("\n-- Cargo generation --")
     print(f"  Cargo size        : {CARGO_SIZE_MMBTU:,.0f} mmBtu")
