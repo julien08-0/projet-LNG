@@ -12,30 +12,26 @@ st.set_page_config(
 
 from ui.map        import render_map
 from ui.pnl        import render_pnl
-from ui.disruption import render_disruption
 from ui.fleet      import render_fleet
 from ui.spot       import render_spot
 
 from train_ops.ui.train import render_train
 
 page = st.sidebar.selectbox("Navigation", [
-    "Fleet Map",
-    "P&L & KPIs",
-    "Disruption Simulator",
-    "Fleet Management",
-    "Spot Trading",
+    "Fleet Map (All)",
+    "P&L & KPIs (Contracts)",
+    "Fleet Management (Contracts)",
+    "Spot Trading (Spot)",
     "Train Performance (upstream)",
 ])
 
-if page == "Fleet Map":
+if page == "Fleet Map (All)":
     render_map()
-elif page == "P&L & KPIs":
+elif page == "P&L & KPIs (Contracts)":
     render_pnl()
-elif page == "Disruption Simulator":
-    render_disruption()
-elif page == "Fleet Management":
+elif page == "Fleet Management (Contracts)":
     render_fleet()
-elif page == "Spot Trading":
+elif page == "Spot Trading (Spot)":
     render_spot()
 elif page == "Train Performance (upstream)":
     render_train()

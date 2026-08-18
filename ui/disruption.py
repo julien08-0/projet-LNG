@@ -2,6 +2,10 @@
 # Disruption simulator: vessel delay / terminal offline.
 # Shows the fleet-wide $ impact (baseline vs scenario). No business logic
 # lives here — everything comes from core.disruption.simulate_disruption_impact.
+#
+# Doesn't carry enough on its own to justify a standalone nav page — embedded
+# directly (no expander) at the bottom of the "Fleet Management" page via
+# render_disruption(), same pattern as ui/gantt.py's render_gantt_chart().
 
 import sys
 import os
@@ -71,9 +75,10 @@ def _render_cargo_diff_table(impact):
 
 
 def render_disruption():
-    inject_theme()
-    st.title("Disruption Simulator")
-    st.caption("$ impact on fleet-wide net margin, before vs after the scenario.")
+    """Draws the disruption-simulator tabs (vessel delay / terminal offline).
+    No title/theme injection — meant to be embedded inside another page's
+    layout (the "Fleet Management" page)."""
+    st.caption("Impact on fleet-wide net margin, before vs after the scenario.")
 
     VESSELS = get_fleet()
 
@@ -113,4 +118,6 @@ def render_disruption():
 
 
 if __name__ == "__main__":
+    inject_theme()
+    st.title("Disruption Simulator (standalone preview)")
     render_disruption()
