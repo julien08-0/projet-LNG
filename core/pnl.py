@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timedelta
 
 from config import TERMINAL_PRICE_MARKER, FREIGHT_RATE_USD_PER_DAY, DEMURRAGE_RATE
-from core.routing import build_route, haversine_nm
+from core.routing import build_route
 from core.physics import calculate_eta, calculate_boiloff, calculate_demurrage
 from core.constraints import check_draft_compatibility, check_laycan_compliance
 from core.market import get_market_snapshot
@@ -63,7 +63,7 @@ def calculate_cargo_margin(cargo, vessel, loading_terminal, destination_terminal
     eta = calculate_eta(
         departure_date_iso=loading_end.isoformat(timespec="minutes"),
         distance_nm=route["distance_nm"],
-        speed_knots=vessel["speed_knots"],
+        speed_knots=vessel["laden_speed_knots"],
         weather_delay_hours=route["weather_delay_hours"],
         canal_delay_hours=route["canal_delay_hours"],
     )
@@ -82,14 +82,18 @@ def calculate_cargo_margin(cargo, vessel, loading_terminal, destination_terminal
     canal_toll_usd       = route["canal_toll_usd"]
 
     # Demurrage: is the vessel late arriving at the loading terminal?
-    dist_to_load = haversine_nm(
-        vessel["current_lat"], vessel["current_lon"],
-        loading_terminal["lat"], loading_terminal["lon"],
-    )
+    # Real routed distance (consistent with core.optimizer's reachability
+    # check — same physical leg, shouldn't be measured two different ways
+    # in two different places) and ballast speed, since the vessel isn't
+    # carrying cargo yet on this leg.
+    vessel_position = {"id": "VESSEL_POSITION", "lat": vessel["current_lat"], "lon": vessel["current_lon"]}
+    route_to_load = build_route(vessel_position, loading_terminal, closed_chokepoints)
     eta_to_load = calculate_eta(
         departure_date_iso=vessel["available_from"],
-        distance_nm=max(dist_to_load, 1.0),
-        speed_knots=vessel["speed_knots"],
+        distance_nm=max(route_to_load["distance_nm"], 1.0),
+        speed_knots=vessel["ballast_speed_knots"],
+        weather_delay_hours=route_to_load["weather_delay_hours"],
+        canal_delay_hours=route_to_load["canal_delay_hours"],
     )
     laycan = check_laycan_compliance(
         eta_iso=eta_to_load["eta_iso"],

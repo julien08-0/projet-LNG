@@ -4,6 +4,7 @@
 
 import sys
 import os
+import math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
@@ -52,6 +53,16 @@ def calculate_boiloff(cargo_volume_mmbtu, transit_days, vessel_class,
     """
     Calculate boil-off gas (BOG) for a transit leg.
 
+    Exponential decay, not linear: the gas that evaporates is a fraction of
+    what's still IN the tank, not of the original load — the same reason
+    radioactive decay or drug elimination is exponential, not linear. A
+    linear model (volume_initial x rate x days) overstates the loss on
+    long transits, since it keeps "charging" the daily rate against gas
+    that has already boiled off. Negligible difference under ~10 days;
+    increasingly wrong beyond 30 (this project's other long legs — the
+    big spot-market ballasts to Sabine Pass — are exactly where it
+    mattered enough to fix).
+
     Returns a dict with:
       gross_bog_mmbtu       : total gas evolved
       bog_used_as_fuel_mmbtu: portion consumed by engines
@@ -70,13 +81,13 @@ def calculate_boiloff(cargo_volume_mmbtu, transit_days, vessel_class,
 
     effective_rate = base_rate * temp_factor
 
-    gross_bog = cargo_volume_mmbtu * effective_rate * transit_days
+    volume_delivered = cargo_volume_mmbtu * math.exp(-effective_rate * transit_days)
+    gross_bog = cargo_volume_mmbtu - volume_delivered
 
     daily_fuel = DAILY_FUEL_CONSUMPTION_MMBTU[vessel_class]
     engine_demand = daily_fuel * transit_days
     bog_as_fuel = min(gross_bog, engine_demand)
 
-    volume_delivered = cargo_volume_mmbtu - gross_bog
     bunker_saving = bog_as_fuel * PRICE_HFO
 
     return {
@@ -91,17 +102,41 @@ def calculate_boiloff(cargo_volume_mmbtu, transit_days, vessel_class,
 # Heel
 # ---------------------------------------------------------------------------
 
-def calculate_heel_requirement(vessel_capacity_m3, vessel_class, actual_heel_m3=None):
+def calculate_heel_requirement(vessel_capacity_m3, vessel_class, actual_heel_m3=None,
+                                ballast_days=0.0, ambient_temp_celsius=25.0):
     """
     Calculate minimum heel requirement and check compliance.
 
+    HEEL_FRACTION (config.py) is the heel a vessel needs to still HAVE on
+    arrival — not what it needs to leave with. The heel boils off during
+    the ballast leg exactly like cargo does (same LNG, same tanks), so a
+    long ballast erodes it. ballast_days=0 (the default) reduces to the
+    original flat-fraction behavior; pass the actual ballast leg length to
+    size the heel a vessel must carry AT DEPARTURE so the base fraction is
+    still there when it arrives to load.
+
     Returns a dict with:
-      required_heel_m3 : minimum heel needed
+      required_heel_m3 : minimum heel needed at departure
       actual_heel_m3    : what the vessel retains
       is_sufficient     : True if actual >= required
+      erosion_m3        : how much of the departure heel boils off over
+                           ballast_days (0 if ballast_days=0)
     """
     fraction = HEEL_FRACTION[vessel_class]
-    required_m3 = vessel_capacity_m3 * fraction
+    base_required_m3 = vessel_capacity_m3 * fraction
+
+    if ballast_days > 0:
+        # Same physics as calculate_boiloff, applied to the heel volume
+        # itself: how much heel survives ballast_days of erosion, and so
+        # how much more you must depart with to still have base_required_m3
+        # left on arrival.
+        retention = calculate_boiloff(base_required_m3, ballast_days, vessel_class,
+                                       ambient_temp_celsius)["volume_delivered_mmbtu"] / base_required_m3
+        required_m3 = base_required_m3 / retention
+        erosion_m3 = required_m3 - base_required_m3
+    else:
+        required_m3 = base_required_m3
+        erosion_m3 = 0.0
 
     if actual_heel_m3 is None:
         actual_heel_m3 = required_m3
@@ -113,7 +148,22 @@ def calculate_heel_requirement(vessel_capacity_m3, vessel_class, actual_heel_m3=
         "actual_heel_m3":   round(actual_heel_m3, 1),
         "is_sufficient":    is_sufficient,
         "deficit_m3":       round(max(0.0, required_m3 - actual_heel_m3), 1),
+        "erosion_m3":       round(erosion_m3, 1),
     }
+
+
+def calculate_heel_remaining(current_heel_m3, vessel_class, days_elapsed, ambient_temp_celsius=25.0):
+    """
+    How much heel is left after days_elapsed of ballast erosion — used to
+    animate the fill level during the ballast leg (ui/map.py) instead of
+    treating heel as a flat floor the whole time it's aboard.
+    """
+    if days_elapsed <= 0 or current_heel_m3 <= 0:
+        return current_heel_m3
+    retained_fraction = calculate_boiloff(
+        current_heel_m3, days_elapsed, vessel_class, ambient_temp_celsius
+    )["volume_delivered_mmbtu"] / current_heel_m3
+    return current_heel_m3 * retained_fraction
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +219,7 @@ if __name__ == "__main__":
     eta = calculate_eta(
         departure_date_iso=cargo["laycan_start"],
         distance_nm=route["distance_nm"],
-        speed_knots=vessel["speed_knots"],
+        speed_knots=vessel["laden_speed_knots"],
         weather_delay_hours=route["weather_delay_hours"],
         canal_delay_hours=route["canal_delay_hours"],
     )
@@ -196,10 +246,34 @@ if __name__ == "__main__":
         vessel_class=vessel["vessel_class"],
         actual_heel_m3=vessel["current_heel_m3"],
     )
-    print(f"\n-- Heel --")
+    print(f"\n-- Heel (no ballast, flat fraction) --")
     print(f"  Required heel : {heel['required_heel_m3']:,.0f} m3")
     print(f"  Actual heel   : {heel['actual_heel_m3']:,.0f} m3")
     print(f"  Sufficient    : {heel['is_sufficient']}")
+
+    print(f"\n-- Heel requirement vs ballast duration ({vessel['vessel_class']}) --")
+    for ballast_days in [0, 5, 15, 25]:
+        h = calculate_heel_requirement(vessel["capacity_m3"], vessel["vessel_class"], ballast_days=ballast_days)
+        print(f"  {ballast_days:>2}d ballast -> required {h['required_heel_m3']:>8,.0f} m3 "
+              f"(+{h['erosion_m3']:>6,.0f} m3 vs flat fraction)")
+
+    print(f"\n-- Heel erosion over an actual ballast leg --")
+    heel_m3 = vessel["current_heel_m3"]
+    for days in [0, 5, 10, 20]:
+        remaining = calculate_heel_remaining(heel_m3, vessel["vessel_class"], days)
+        print(f"  day {days:>2}: {remaining:>8,.0f} m3 remaining (started with {heel_m3:,.0f})")
+    assert calculate_heel_remaining(heel_m3, vessel["vessel_class"], 0) == heel_m3
+    assert calculate_heel_remaining(heel_m3, vessel["vessel_class"], 20) < heel_m3
+
+    print(f"\n-- Exponential vs linear sanity check (long transit) --")
+    # ambient = reference temp -> temp_factor is exactly 1.0, so both sides
+    # use the identical base rate and the comparison isolates linear-vs-
+    # exponential, not an accidental side effect of the temperature term.
+    bog_30d = calculate_boiloff(3_000_000, 30, "TFDE", ambient_temp_celsius=BOG_TEMP_REFERENCE_CELSIUS)
+    linear_equivalent = 3_000_000 * BOILOFF_RATE["TFDE"] * 30
+    print(f"  Exponential gross BOG (30d) : {bog_30d['gross_bog_mmbtu']:,.0f} mmBtu")
+    print(f"  Naive linear equivalent     : {linear_equivalent:,.0f} mmBtu")
+    assert bog_30d["gross_bog_mmbtu"] < linear_equivalent, "exponential must lose less than naive linear"
 
     # 4. Demurrage
     demurrage = calculate_demurrage(delay_hours=30.0, daily_rate_usd=cargo["demurrage_rate_usd_day"])

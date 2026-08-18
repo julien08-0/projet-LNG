@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timedelta
 from core.constraints import check_draft_compatibility
-from core.routing import build_route, haversine_nm
+from core.routing import build_route
 from core.pnl import best_destination_for_cargo
 from core.market import get_market_snapshot
 
@@ -52,11 +52,19 @@ def _is_compatible(vessel, cargo, terminals_by_id, closed_chokepoints=None):
         return False, "draft incompatible"
 
     # Reachability: can vessel reach loading terminal before laycan_end?
-    dist_nm = haversine_nm(
-        vessel["current_lat"], vessel["current_lon"],
-        loading_term["lat"],   loading_term["lon"],
-    )
-    transit_days     = dist_nm / vessel["speed_knots"] / 24.0
+    # Uses the real routed distance (build_route), not straight-line —
+    # a straight line can be shorter than the real shipping route when a
+    # chokepoint detour is involved, which would wrongly call a vessel
+    # "reachable" when the actual route gets there too late. Ballast
+    # (empty) speed, since this is the vessel sailing to pick up cargo,
+    # not carrying it yet.
+    vessel_position = {"id": "VESSEL_POSITION", "lat": vessel["current_lat"], "lon": vessel["current_lon"]}
+    route_to_load = build_route(vessel_position, loading_term, closed_chokepoints)
+    if route_to_load["blocked"]:
+        return False, f"no route to {cargo['loading_terminal']} given closed chokepoints"
+
+    transit_days = (route_to_load["distance_nm"] / vessel["ballast_speed_knots"]
+                     + route_to_load["weather_delay_hours"] + route_to_load["canal_delay_hours"]) / 24.0
     vessel_available = datetime.fromisoformat(vessel["available_from"])
     earliest_arrival = vessel_available + timedelta(days=transit_days)
     laycan_end       = datetime.fromisoformat(cargo["laycan_end"])

@@ -40,7 +40,7 @@ def apply_vessel_delay(vessel, cargo, route, delay_hours):
     eta = calculate_eta(
         departure_date_iso=delayed_departure.isoformat(timespec="minutes"),
         distance_nm=route["distance_nm"],
-        speed_knots=vessel["speed_knots"],
+        speed_knots=vessel["ballast_speed_knots"],   # current position -> loading terminal: ballast leg
         weather_delay_hours=route["weather_delay_hours"],
         canal_delay_hours=route["canal_delay_hours"],
     )
