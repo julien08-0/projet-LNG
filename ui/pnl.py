@@ -22,9 +22,9 @@ from core.pnl        import enrich_assignments_with_pnl, format_decision_text
 from ui.alerts       import detect_alerts, render_alerts_section
 from ui.gantt        import render_gantt_chart
 from ui.fleet_state  import get_fleet
-from ui.theme        import (inject_theme, hero_metric, badge_html, PAGE_BG, CHART_BG, BORDER,
-                              TEXT_PRIMARY, TEXT_MUTED, STATUS_GOOD, STATUS_CRITICAL, STATUS_WARNING,
-                              VESSEL_PALETTE, TERMINAL_LOAD_COLOR)
+from ui.theme        import (inject_theme, hero_metric, compact_metric, badge_html,
+                              PAGE_BG, CHART_BG, BORDER, TEXT_PRIMARY, TEXT_MUTED,
+                              STATUS_GOOD, STATUS_CRITICAL, VESSEL_PALETTE, TERMINAL_LOAD_COLOR)
 
 
 def compute_kpis(enriched_assignments, cargoes, vessels):
@@ -61,6 +61,22 @@ def compute_kpis(enriched_assignments, cargoes, vessels):
         "total_net_margin_usd":    round(total_net_margin, 0),
         "unassigned_count":        len(cargoes) - len(feasible_cargo_ids),
     }
+
+
+def _fmt_mmbtu(value):
+    """Rounded, abbreviated volume — short enough to never wrap onto a
+    neighboring compact_metric column."""
+    if abs(value) >= 1e6:
+        return f"{value/1e6:,.1f}M mmBtu"
+    return f"{value/1e3:,.1f}K mmBtu"
+
+
+def _fmt_usd(value):
+    """Rounded, abbreviated dollar amount — same M/K convention as the
+    hero metrics elsewhere on this page."""
+    if abs(value) >= 1e6:
+        return f"${value/1e6:,.1f}M"
+    return f"${value/1e3:,.1f}K"
 
 
 def candidates_to_dataframe(candidates):
@@ -129,6 +145,7 @@ def render_pnl():
     inject_theme()
     st.title("P&L & KPIs")
     st.caption("Destination decisions, schedule, and fleet performance.")
+    st.caption("Contracts only — spot trading is tracked separately, see the Spot Trading page.")
 
     VESSELS = get_fleet()
     result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
@@ -147,7 +164,7 @@ def render_pnl():
 
     st.divider()
     st.subheader("Schedule (Gantt)")
-    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])
+    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS)
 
     st.divider()
     st.subheader("Detail")
@@ -164,49 +181,22 @@ def render_pnl():
             unsafe_allow_html=True,
         )
 
-    if result["unassigned"]:
-        st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
-        st.subheader("Unassigned cargoes")
-        for u in result["unassigned"]:
-            priority = cargoes_by_id[u["cargo_id"]]["priority"]
-            color = STATUS_CRITICAL if priority >= 8 else STATUS_WARNING
-            st.markdown(
-                f"<div style='margin-bottom:6px;font-size:0.88rem;'>"
-                f"{badge_html(u['cargo_id'], color)} <span style='color:{TEXT_MUTED};'>{u['reason']}</span></div>",
-                unsafe_allow_html=True,
-            )
-
     st.divider()
 
     kpis = compute_kpis(enriched, CARGOES, VESSELS)
 
-    st.subheader("Fleet")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Vessels deployed", f"{kpis['vessels_deployed']} / {kpis['vessels_total']}")
-    col2.metric("Cargoes covered",  f"{kpis['cargoes_covered']} / {kpis['cargoes_total']}")
-    col3.metric("Unassigned cargoes", kpis["unassigned_count"])
-    if kpis["vessels_deployed"] == kpis["vessels_total"] and kpis["unassigned_count"] > 0:
-        st.caption(
-            "Every vessel is deployed (100% of the fleet) and a cargo is still "
-            "unassigned — not a contradiction: there are more cargoes than "
-            "vessels this month, so full fleet deployment is the ceiling, not "
-            "full cargo coverage. See the alert below for which one and why."
-        )
-
-    st.divider()
-
-    st.subheader("Volumes")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total volume contracted", f"{kpis['total_volume_mmbtu']:,.0f} mmBtu")
-    col2.metric("Total BOG loss",          f"{kpis['total_bog_mmbtu']:,.0f} mmBtu")
-    col3.metric("BOG value lost",          f"${kpis['total_bog_usd']:,.0f}")
-
-    st.divider()
-
-    st.subheader("Costs")
-    col1, col2 = st.columns(2)
-    col1.metric("Bunker saving (BOG as fuel)", f"${kpis['total_bunker_saving_usd']:,.0f}")
-    col2.metric("Net BOG cost", f"${kpis['total_bog_usd'] - kpis['total_bunker_saving_usd']:,.0f}")
+    st.subheader("Volumes & Costs")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        compact_metric("Total volume contracted", _fmt_mmbtu(kpis["total_volume_mmbtu"]))
+    with col2:
+        compact_metric("Total BOG loss", _fmt_mmbtu(kpis["total_bog_mmbtu"]))
+    with col3:
+        compact_metric("BOG value lost", _fmt_usd(kpis["total_bog_usd"]))
+    with col4:
+        compact_metric("Bunker saving (BOG as fuel)", _fmt_usd(kpis["total_bunker_saving_usd"]))
+    with col5:
+        compact_metric("Net BOG cost", _fmt_usd(kpis["total_bog_usd"] - kpis["total_bunker_saving_usd"]))
 
     st.divider()
     alerts = detect_alerts(result["assignments"], CARGOES, VESSELS, TERMINALS)

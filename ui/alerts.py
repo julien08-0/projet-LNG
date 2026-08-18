@@ -73,16 +73,16 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
                 "severity": "CRITICAL",
                 "cargo_id":  cargo["id"],
                 "vessel_id": vessel["id"],
-                "message":  f"Laycan breach: vessel arrives {laycan['delay_hours']:.1f}h "
-                            f"after laycan end — demurrage risk",
+                "message":  f"Late arrival at LOADING (laycan breach): vessel arrives "
+                            f"{laycan['delay_hours']:.1f}h after laycan end — demurrage risk",
             })
         elif laycan["status"] == "EARLY":
             alerts.append({
                 "severity": "WARNING",
                 "cargo_id":  cargo["id"],
                 "vessel_id": vessel["id"],
-                "message":  f"Early arrival: vessel waits {laycan['waiting_hours']:.1f}h "
-                            f"at anchor — extra BOG loss",
+                "message":  f"Early arrival at LOADING (laycan): vessel waits "
+                            f"{laycan['waiting_hours']:.1f}h at anchor — extra BOG loss",
             })
 
         # 3. Build slot for overlap check
@@ -125,36 +125,39 @@ def detect_alerts(assignments, cargoes, vessels, terminals):
     return alerts
 
 
+SEVERITY_EMOJI = {"CRITICAL": "🔴", "WARNING": "🟠", "INFO": "ℹ️"}
+SEVERITY_RANK  = {"CRITICAL": 0, "WARNING": 1, "INFO": 2}
+
+
 def render_alerts_section(alerts):
     """Compact alerts block — embedded at the bottom of the "P&L & KPIs" page,
-    not a standalone page. No title/hero: the parent page already has one."""
-    critical = [a for a in alerts if a["severity"] == "CRITICAL"]
-    warnings = [a for a in alerts if a["severity"] == "WARNING"]
-    infos    = [a for a in alerts if a["severity"] == "INFO"]
+    not a standalone page. No title/hero: the parent page already has one.
 
+    One collapsible table for every severity, with a "Level" column carrying
+    the emoji — lighter than three separate blocks (always-visible errors +
+    two expanders), while critical/warning/info stay distinguishable at a
+    glance via the emoji instead of via layout position."""
     st.subheader("Alerts & Conflicts")
 
     if not alerts:
         st.success("No alerts detected — all assignments are valid.")
         return
 
+    critical = [a for a in alerts if a["severity"] == "CRITICAL"]
+    warnings = [a for a in alerts if a["severity"] == "WARNING"]
+    infos    = [a for a in alerts if a["severity"] == "INFO"]
     st.caption(f"{len(critical)} critical · {len(warnings)} warnings · {len(infos)} info")
 
-    def _table(rows):
-        return pd.DataFrame([{"Cargo": a["cargo_id"], "Vessel": a["vessel_id"], "Message": a["message"]}
-                              for a in rows])
+    rows = sorted(alerts, key=lambda a: SEVERITY_RANK[a["severity"]])
+    df = pd.DataFrame([{
+        "Level":   f"{SEVERITY_EMOJI[a['severity']]} {a['severity'].title()}",
+        "Cargo":   a["cargo_id"],
+        "Vessel":  a["vessel_id"],
+        "Message": a["message"],
+    } for a in rows])
 
-    for a in critical:
-        st.error(f"**{a['cargo_id']} / {a['vessel_id']}** — {a['message']}")
-
-    if warnings:
-        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-        with st.expander(f"⚠️ {len(warnings)} warning(s)", expanded=len(warnings) <= 3):
-            st.dataframe(_table(warnings), use_container_width=True, hide_index=True)
-
-    if infos:
-        with st.expander(f"ℹ️ {len(infos)} info"):
-            st.dataframe(_table(infos), use_container_width=True, hide_index=True)
+    with st.expander(f"{len(alerts)} alert(s)", expanded=len(critical) > 0):
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
 # ui/gantt.py
 # Gantt chart: vessel schedule over the horizon.
-# Green = on time, Orange = tight window, Red = delivery window breached.
+# Bar colors reflect arrival at the DISCHARGE terminal vs. the cargo's
+# delivery window (dw_start/dw_end) — Green = on time, Orange = early,
+# Red = window breached. This is a different leg/window than the LOADING
+# laycan compliance shown in Alerts & Conflicts (arrival at the loading
+# terminal vs. laycan_start/laycan_end) — the two can disagree, that's
+# expected, not a bug.
 #
 # Doesn't carry enough on its own to justify a standalone nav page — it's
 # the same fleet/contracts as the Fleet Map, just viewed on a time axis
@@ -77,10 +82,11 @@ def build_gantt_data(enriched_assignments, cargoes, vessels, terminals):
     return bars
 
 
-def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
-    """Draws the Gantt figure + legend + unassigned list. No title/theme
-    injection — meant to be embedded inside another page's layout (the
-    "P&L & KPIs" page)."""
+def render_gantt_chart(enriched, cargoes, vessels, terminals):
+    """Draws the Gantt figure + legend. No title/theme injection — meant to
+    be embedded inside another page's layout (the "P&L & KPIs" page).
+    Unassigned cargoes aren't listed here — that's covered by the page's
+    Alerts & Conflicts section, no need to repeat it."""
     bars = build_gantt_data(enriched, cargoes, vessels, terminals)
 
     fig = go.Figure()
@@ -131,15 +137,14 @@ def render_gantt_chart(enriched, cargoes, vessels, terminals, unassigned):
 
     st.plotly_chart(fig, use_container_width=True)
 
+    st.caption(
+        "Colors show arrival at the discharge terminal vs. the delivery "
+        "window — loading/laycan timing is separate, see Alerts & Conflicts below."
+    )
     col1, col2, col3 = st.columns(3)
-    col1.success("🟢 On time")
-    col2.warning("🟠 Early / tight")
+    col1.success("🟢 Discharge on time")
+    col2.warning("🟠 Discharge early")
     col3.error("🔴 Delivery window breached")
-
-    if unassigned:
-        st.subheader("Unassigned cargoes")
-        for u in unassigned:
-            st.error(f"**{u['cargo_id']}** — {u['reason']}")
 
 
 if __name__ == "__main__":
@@ -154,4 +159,4 @@ if __name__ == "__main__":
     st.title("Gantt (standalone preview)")
     result   = assign_cargoes(CARGOES, VESSELS, TERMINALS)
     enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS)
-    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS, result["unassigned"])
+    render_gantt_chart(enriched, CARGOES, VESSELS, TERMINALS)
