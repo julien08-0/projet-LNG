@@ -31,11 +31,17 @@ from config          import BOILOFF_RATE, SPOT_HORIZON_DAYS
 from ui.fleet_state  import get_fleet
 from ui.theme        import (inject_theme, badge_html, PAGE_BG, CHART_BG, VESSEL_PALETTE,
                               TERMINAL_LOAD_COLOR, TERMINAL_DISCHARGE_COLOR,
-                              TEXT_MUTED, BORDER, MAP_LAND_COLOR, MAP_OCEAN_COLOR,
+                              TEXT_PRIMARY, TEXT_MUTED, BORDER, MAP_LAND_COLOR, MAP_OCEAN_COLOR,
                               MAP_COAST_COLOR, MAP_COUNTRY_COLOR,
                               hero_metric, STATUS_GOOD, STATUS_CRITICAL)
 
 LAST_DAY = SPOT_HORIZON_DAYS - 1   # slider is 0-indexed (Day 0 = sim start)
+
+# Shared subtitle style for this page's section headers ("Total net P&L" and
+# "Fleet Map — Animation") — centered, bigger and bolder than the default
+# hero_metric kicker or st.subheader, so both read as the same visual tier.
+SUBTITLE_SIZE   = "1.4rem"
+SUBTITLE_WEIGHT = 700
 
 
 # ---------------------------------------------------------------------------
@@ -128,11 +134,38 @@ def get_vessel_state(vessel, cargo, route, day, sim_start, discharge_terminal_id
 
     if current < laycan_start:
         # Ballast leg — no commercial cargo, heel erodes progressively.
-        ballast_days_elapsed = max(0.0, (current - sim_start).total_seconds() / 86400.0)
+        # Elapsed time is measured from THIS job's own ballast start
+        # (laycan_start minus its own ballast_days_total), not from
+        # sim_start — for a vessel's 2nd+ job, sim_start is long past by
+        # the time this leg begins, and using it here would wildly
+        # overstate elapsed ballast time (same reasoning as
+        # ballast_days_total above, applied consistently).
+        ballast_start = laycan_start - timedelta(days=ballast_days_total)
+        ballast_days_elapsed = max(0.0, (current - ballast_start).total_seconds() / 86400.0)
         remaining_heel_m3 = calculate_heel_remaining(
             vessel["current_heel_m3"], vessel["vessel_class"], ballast_days_elapsed, ambient_temp_celsius=28.0)
         fill = remaining_heel_m3 / vessel["capacity_m3"]
-        return {"lat": vessel["current_lat"], "lon": vessel["current_lon"],
+
+        # Position: a vessel's very FIRST job has no previous port to sail
+        # from — it stays at its known starting position (documented
+        # simplification, unchanged). From the 2nd job onward, it's really
+        # sailing from wherever it just finished discharging to this job's
+        # loading terminal — animate that leg the same way the laden
+        # transit below is animated, instead of freezing at a stale
+        # position (or worse, the vessel's very first starting position,
+        # which is what used to cause a visible teleport at loading time).
+        origin_terminal_id = cargo.get("ballast_origin_terminal_id")
+        if origin_terminal_id is None:
+            lat, lon = vessel["current_lat"], vessel["current_lon"]
+        else:
+            origin_term  = next(t for t in TERMINALS if t["id"] == origin_terminal_id)
+            loading_term = next(t for t in TERMINALS if t["id"] == cargo["loading_terminal"])
+            ballast_route = build_route(origin_term, loading_term)
+            fraction = min(ballast_days_elapsed / ballast_days_total, 1.0) if ballast_days_total > 0 else 1.0
+            pos = interpolate_position(ballast_route["waypoints"], fraction)
+            lat, lon = pos[0], pos[1]
+
+        return {"lat": lat, "lon": lon,
                 "phase": "waiting", "fill": round(fill, 3), "volume": 0}
 
     if current < loading_end:
@@ -187,7 +220,12 @@ def _vessel_voyages(vessel_id, contract_entry, cargoes_by_id, spot_decisions_by_
     """Ordered list of this vessel's jobs: the fixed contract first (if any),
     then its spot voyages in dispatch order. core/spot.py never dispatches a
     vessel before its previous job (contract or spot) has fully discharged,
-    so these never overlap in time — each job can be resolved independently."""
+    so these never overlap in time — each job can be resolved independently.
+
+    Each job past the first is also annotated with ballast_origin_terminal_id
+    — the previous job's discharge terminal, i.e. where this job's ballast
+    leg actually starts from. The first job has none (None): a vessel's very
+    first job starts from its own current position, not a previous port."""
     jobs = []
 
     if contract_entry is not None:
@@ -223,16 +261,39 @@ def _vessel_voyages(vessel_id, contract_entry, cargoes_by_id, spot_decisions_by_
         })
 
     jobs.sort(key=lambda j: j["start_day"])
+
+    # Ballast origin for job i (i>0) is job i-1's discharge terminal — the
+    # vessel sails there from wherever it just finished discharging, never
+    # from its original day-0 position. Job 0 keeps ballast_origin_terminal_id
+    # absent (defaults to None via .get() in get_vessel_state/_voyage_cargo).
+    for i in range(1, len(jobs)):
+        jobs[i]["ballast_origin_terminal_id"] = jobs[i - 1]["discharge_terminal_id"]
+
     return jobs
 
 
 def _current_voyage(jobs, day):
-    """The job whose loading start is the most recent one on/before `day` —
-    or the first job if none has started yet, so the ship still renders,
-    waiting at its true starting position."""
+    """The job whose BALLAST has most recently begun on/before `day` — not
+    its loading start — or the first job if none has started yet, so the
+    ship still renders, waiting at its true starting position.
+
+    Using ballast start (start_day - ballast_days) rather than loading
+    start matters for a vessel's 2nd+ job: with loading start as the
+    switchover point, the previous job stayed "current" (shown motionless,
+    already "completed") all the way until the new job's loading day, so
+    the ballast leg between them never got a chance to render at all — the
+    vessel appeared to jump straight from one terminal to the other. This
+    switches to the new job as soon as it actually starts sailing."""
     if not jobs:
         return None
-    eligible = [j for j in jobs if j["start_day"] <= day]
+    # Epsilon guard: start_day = dispatch_day + ballast_days is built from a
+    # rounded ballast_days (core.spot rounds to 2dp), so start_day - ballast_days
+    # can land a hair above the intended integer dispatch_day (e.g.
+    # 5.000000000000002) instead of exactly on it — without the epsilon, a
+    # job becomes eligible one day late on that exact boundary day, reviving
+    # a milder version of the same "stuck on the previous job" symptom this
+    # fix targets.
+    eligible = [j for j in jobs if (j["start_day"] - j["ballast_days"]) <= day + 1e-6]
     return max(eligible, key=lambda j: j["start_day"]) if eligible else jobs[0]
 
 
@@ -241,12 +302,16 @@ def _voyage_cargo(job):
     contract, synthetic for a spot voyage. ballast_days is this specific
     voyage's own ballast length (see get_vessel_state) — required, not
     derived from elapsed simulation time, so a vessel's 2nd+ spot voyage
-    doesn't get charged ballast erosion for time spent on an earlier job."""
+    doesn't get charged ballast erosion for time spent on an earlier job.
+    ballast_origin_terminal_id (absent/None for a vessel's first job) lets
+    get_vessel_state animate the ballast leg from the right port instead of
+    freezing at the vessel's original day-0 position."""
     return {
         "laycan_start":     job["loading_start_iso"],
         "loading_terminal": job["loading_terminal_id"],
         "volume_mmbtu":     job["volume_mmbtu"],
         "ballast_days":     job.get("ballast_days"),
+        "ballast_origin_terminal_id": job.get("ballast_origin_terminal_id"),
     }
 
 
@@ -501,46 +566,55 @@ def _render_contracts_panel(day, enriched, unassigned, vessels, cargoes, termina
 # core/spot.py actually dispatched this run.
 # ---------------------------------------------------------------------------
 
-def _spot_rows(day, spot_decisions, vessels, terminals, sim_start):
+def _spot_rows(day, spot_decisions, vessels, terminals, cargoes_by_id, contract_by_vessel, sim_start):
+    """Builds each spot job through _vessel_voyages() — the exact same
+    per-vessel job list (and ballast_origin_terminal_id annotation) the map
+    itself uses — instead of a second, ad-hoc job dict. Before this, a
+    vessel's 2nd+ spot voyage here had no ballast_origin_terminal_id at
+    all, so this table's "Status" column could show the same teleport the
+    map did; going through _vessel_voyages() keeps both in agreement."""
     vessels_by_id   = {v["id"]: v for v in vessels}
     terminals_by_id = {t["id"]: t for t in terminals}
 
-    rows = []
+    spot_by_vessel = {}
     for d in spot_decisions:
-        if day < d["dispatch_day"]:
-            status = "Not yet dispatched"
-        else:
-            vessel = vessels_by_id[d["vessel_id"]]
-            job = {
-                "loading_terminal_id":   d["load_terminal_id"],
-                "discharge_terminal_id": d["discharge_terminal_id"],
-                "volume_mmbtu":          d["volume_mmbtu"],
-                "loading_start_iso": (sim_start + timedelta(
-                    days=d["dispatch_day"] + d["ballast_days"])).isoformat(timespec="minutes"),
-                "ballast_days": d["ballast_days"],
-            }
-            route = build_route(terminals_by_id[d["load_terminal_id"]], terminals_by_id[d["discharge_terminal_id"]])
-            state = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, d["discharge_terminal_id"])
-            status = PHASE_LABEL[state["phase"]]
+        spot_by_vessel.setdefault(d["vessel_id"], []).append(d)
 
-        settled = day >= d["arrival_day"]
-        rows.append({
-            "Vessel": d["vessel_id"], "Dispatch day": d["dispatch_day"],
-            "Route": f"{d['load_terminal_id']} → {d['discharge_terminal_id']}",
-            "Status": status,
-            "Margin (expected) ($)": d["expected_margin_usd"],
-            # Pre-formatted string ("—" when not yet settled), not a NumberColumn
-            # NaN — a NumberColumn with a custom format renders a missing
-            # numeric value as the literal text "None" in this Streamlit version.
-            "Margin (realized) ($)": f"${d['realized_margin_usd']:,.0f}" if settled else "—",
-            "Outcome": d["outcome"].upper() if settled else "Pending",
-        })
+    rows = []
+    for vessel_id, decisions in spot_by_vessel.items():
+        vessel = vessels_by_id[vessel_id]
+        jobs = _vessel_voyages(vessel_id, contract_by_vessel.get(vessel_id), cargoes_by_id, spot_by_vessel, sim_start)
+
+        for job in jobs:
+            if job["kind"] != "spot":
+                continue
+            d = job["decision"]
+
+            if day < d["dispatch_day"]:
+                status = "Not yet dispatched"
+            else:
+                route = build_route(terminals_by_id[d["load_terminal_id"]], terminals_by_id[d["discharge_terminal_id"]])
+                state = get_vessel_state(vessel, _voyage_cargo(job), route, day, sim_start, d["discharge_terminal_id"])
+                status = PHASE_LABEL[state["phase"]]
+
+            settled = day >= d["arrival_day"]
+            rows.append({
+                "Vessel": d["vessel_id"], "Dispatch day": d["dispatch_day"],
+                "Route": f"{d['load_terminal_id']} → {d['discharge_terminal_id']}",
+                "Status": status,
+                "Margin (expected) ($)": d["expected_margin_usd"],
+                # Pre-formatted string ("—" when not yet settled), not a NumberColumn
+                # NaN — a NumberColumn with a custom format renders a missing
+                # numeric value as the literal text "None" in this Streamlit version.
+                "Margin (realized) ($)": f"${d['realized_margin_usd']:,.0f}" if settled else "—",
+                "Outcome": d["outcome"].upper() if settled else "Pending",
+            })
 
     rows.sort(key=lambda r: r["Dispatch day"])
     return rows
 
 
-def _render_spot_panel(day, spot_sim, vessels, terminals):
+def _render_spot_panel(day, spot_sim, vessels, terminals, cargoes_by_id, contract_by_vessel):
     st.divider()
     st.subheader("Spot voyages")
     st.caption(f"Status as of Day {day} — same clock as the map above. Full book on the Spot Trading page.")
@@ -549,7 +623,7 @@ def _render_spot_panel(day, spot_sim, vessels, terminals):
         st.info("No spot voyages dispatched this month.")
         return
 
-    rows = _spot_rows(day, spot_sim["decisions"], vessels, terminals, datetime(2025, 3, 1))
+    rows = _spot_rows(day, spot_sim["decisions"], vessels, terminals, cargoes_by_id, contract_by_vessel, datetime(2025, 3, 1))
     df = pd.DataFrame(rows)
     st.dataframe(
         df,
@@ -564,6 +638,29 @@ def _render_spot_panel(day, spot_sim, vessels, terminals):
 
 
 # ---------------------------------------------------------------------------
+# Cached wrappers — during Play, render_map() reruns every ~0.5s but the
+# fleet/cargoes/terminals/closed-chokepoints inputs never change day to day,
+# so assign_cargoes (MILP solve) and simulate_spot_market were being
+# recomputed from scratch on every single tick for an identical result.
+# st.cache_data keys on the actual argument values (fleet edits from Fleet
+# Management still correctly invalidate the cache), so this only skips
+# provably redundant work — no change to what gets computed, only how often.
+# Pure passthrough to the existing core/ui functions, unchanged.
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def _cached_assign_and_enrich(vessels, cargoes, terminals, closed):
+    result = assign_cargoes(cargoes, vessels, terminals, closed_chokepoints=closed)
+    enriched = enrich_assignments_with_pnl(result["assignments"], cargoes, vessels, terminals, closed)
+    return result, enriched
+
+
+@st.cache_data(show_spinner=False)
+def _cached_spot_sim(vessels, terminals, cargoes, enriched, n_days):
+    return simulate_spot_market(vessels, terminals, cargoes, enriched, n_days=n_days)
+
+
+# ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 
@@ -572,12 +669,13 @@ def render_map():
 
     VESSELS = get_fleet()
     closed = set()
-    result   = assign_cargoes(CARGOES, VESSELS, TERMINALS, closed_chokepoints=closed)
-    enriched = enrich_assignments_with_pnl(result["assignments"], CARGOES, VESSELS, TERMINALS, closed)
-    spot_sim = simulate_spot_market(VESSELS, TERMINALS, CARGOES, enriched, n_days=SPOT_HORIZON_DAYS)
+    result, enriched = _cached_assign_and_enrich(VESSELS, CARGOES, TERMINALS, closed)
+    spot_sim = _cached_spot_sim(VESSELS, TERMINALS, CARGOES, enriched, SPOT_HORIZON_DAYS)
 
-    st.title("LNG Scheduler & Asset Optimizer")
-    st.caption("Real-time fleet scheduling, routing, and destination optimization for LNG carriers.")
+    st.markdown(
+        "<h1 style='text-align:left;'>LNG Scheduler &amp; Asset Optimizer</h1>",
+        unsafe_allow_html=True,
+    )
 
     contract_margin = sum(a["margin"]["net_margin_usd"] for a in enriched if a["feasible"])
     spot_realized   = spot_sim["summary"]["total_realized_margin_usd"]
@@ -588,10 +686,16 @@ def render_map():
         f"${total_pnl/1e6:,.1f}M",
         sublabel=f"Contracts ${contract_margin/1e6:,.1f}M + Spot (realized) ${spot_realized/1e6:,.1f}M",
         accent=STATUS_GOOD if total_pnl >= 0 else STATUS_CRITICAL,
+        label_size=SUBTITLE_SIZE, label_weight=SUBTITLE_WEIGHT,
+        label_color=TEXT_PRIMARY, label_uppercase=False,
     )
 
     st.divider()
-    st.subheader("Fleet Map — Animation")
+    st.markdown(
+        f"<div style='text-align:center;font-size:{SUBTITLE_SIZE};font-weight:{SUBTITLE_WEIGHT};"
+        f"color:{TEXT_PRIMARY};margin-bottom:12px;'>Fleet Map — Animation</div>",
+        unsafe_allow_html=True,
+    )
 
     # Sidebar controls
     st.sidebar.subheader("Simulation")
@@ -654,15 +758,13 @@ def render_map():
 
     frame_data, routes_cache = build_day_data(current_voyages, TERMINALS, day, vessel_colors, closed)
 
-    current_date = datetime(2025, 3, 1) + timedelta(days=day)
-
     fig = go.Figure(
         data=frame_data,
         layout=go.Layout(
             paper_bgcolor=PAGE_BG,
             plot_bgcolor=PAGE_BG,
             font=dict(color=MUTED_INK),
-            title_text=f"Day {day} — {current_date.strftime('%B %d, 2025')}",
+            title_text=f"Day {day}",
             geo=dict(
                 showland=True, landcolor=LAND_COLOR,
                 showocean=True, oceancolor=OCEAN_COLOR,
@@ -693,7 +795,7 @@ def render_map():
             _render_vessel_card(vessel, vessel_colors[vessel["id"]], state, job)
 
     _render_contracts_panel(day, enriched, result["unassigned"], VESSELS, CARGOES, TERMINALS, closed)
-    _render_spot_panel(day, spot_sim, VESSELS, TERMINALS)
+    _render_spot_panel(day, spot_sim, VESSELS, TERMINALS, cargoes_by_id, contract_by_vessel)
 
     # Play/Pause auto-advance — a full Streamlit rerun per tick keeps the map
     # and side panel on the same `day` clock (no Plotly-side animation, so no
