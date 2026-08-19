@@ -8,4 +8,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
-.claude/scheduled_tasks.lock
+.claude/
+CLAUDE.md
+CONTEXT.md
